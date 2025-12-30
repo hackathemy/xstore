@@ -1,18 +1,20 @@
 import { IMenuItemProps } from "@/types/tab";
 import { useQuery } from "@tanstack/react-query";
-
-const fetchMenuItems = async (storeId: string): Promise<IMenuItemProps[]> => {
-  const response = await fetch(`/api/menu-items?storeId=${storeId}`);
-  if (!response.ok) {
-    throw new Error("Failed to fetch menu items");
-  }
-  return response.json();
-};
+import { api } from "@/lib/api";
 
 export default function useMenuItems(storeId: string | undefined) {
-  return useQuery({
+  return useQuery<IMenuItemProps[]>({
     queryKey: [`menuItems_${storeId}`],
-    queryFn: () => fetchMenuItems(storeId!),
+    queryFn: async (): Promise<IMenuItemProps[]> => {
+      if (!storeId) return [];
+      try {
+        // Menu items are included in store data
+        const store = await api.getStore(storeId);
+        return store?.menuItems || [];
+      } catch {
+        return [];
+      }
+    },
     enabled: !!storeId,
   });
 }

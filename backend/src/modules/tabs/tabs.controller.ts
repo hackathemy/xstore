@@ -35,6 +35,12 @@ export class TabsController {
     return this.tabsService.findByStore(storeId);
   }
 
+  @Get('customer/:customerAddress')
+  @ApiOperation({ summary: 'Get all tabs for a customer (by payment address)' })
+  async findByCustomer(@Param('customerAddress') customerAddress: string) {
+    return this.tabsService.findByCustomer(customerAddress);
+  }
+
   @Post(':id/items')
   @ApiOperation({ summary: 'Add item to tab' })
   async addItem(@Param('id') id: string, @Body() dto: AddItemDto) {

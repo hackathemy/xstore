@@ -44,6 +44,16 @@ export class StoresService {
     return store;
   }
 
+  async findByOwner(owner: string) {
+    return this.prisma.store.findFirst({
+      where: { owner },
+      include: {
+        menuItems: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async update(id: string, dto: UpdateStoreDto) {
     await this.findOne(id); // Check exists
     return this.prisma.store.update({

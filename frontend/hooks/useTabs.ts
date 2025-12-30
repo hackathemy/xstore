@@ -1,30 +1,30 @@
 import { ITabProps } from "@/types/tab";
 import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 
 interface UseTabsParams {
   storeId?: string;
   customer?: string;
-  status?: string;
 }
 
 export default function useTabs(params?: UseTabsParams) {
-  const { storeId, customer, status } = params || {};
-
-  const queryParams = new URLSearchParams();
-  if (storeId) queryParams.append("storeId", storeId);
-  if (customer) queryParams.append("customer", customer);
-  if (status) queryParams.append("status", status);
-
-  const queryString = queryParams.toString();
-  const url = queryString ? `/api/tabs?${queryString}` : "/api/tabs";
-  const key = `tabs_${storeId || "all"}_${customer || "all"}_${status || "all"}`;
+  const { storeId, customer } = params || {};
+  const key = `tabs_${storeId || "none"}_${customer || "none"}`;
 
   return useQuery<ITabProps[]>({
     queryKey: [key],
     queryFn: async (): Promise<ITabProps[]> => {
-      const response = await fetch(url);
-      if (!response.ok) return [];
-      return response.json();
+      try {
+        if (customer) {
+          return await api.getTabsByCustomer(customer);
+        }
+        if (storeId) {
+          return await api.getTabs(storeId);
+        }
+        return [];
+      } catch {
+        return [];
+      }
     },
     enabled: !!(storeId || customer),
   });

@@ -31,6 +31,12 @@ export class StoresController {
     return this.storesService.findAll();
   }
 
+  @Get('owner/:owner')
+  @ApiOperation({ summary: 'Get store by owner address' })
+  async findByOwner(@Param('owner') owner: string) {
+    return this.storesService.findByOwner(owner);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get store by ID' })
   async findOne(@Param('id') id: string) {

@@ -1,19 +1,19 @@
 import { ITabProps } from "@/types/tab";
 import { useQuery } from "@tanstack/react-query";
-
-const fetchTab = async (tabId: string): Promise<ITabProps> => {
-  const response = await fetch(`/api/tabs/${tabId}`);
-  if (!response.ok) {
-    throw new Error("Failed to fetch tab");
-  }
-  return response.json();
-};
+import { api } from "@/lib/api";
 
 export default function useTab(tabId: string | undefined) {
-  return useQuery({
+  return useQuery<ITabProps | null>({
     queryKey: [`tab_${tabId}`],
-    queryFn: () => fetchTab(tabId!),
+    queryFn: async (): Promise<ITabProps | null> => {
+      if (!tabId) return null;
+      try {
+        return await api.getTab(tabId);
+      } catch {
+        return null;
+      }
+    },
     enabled: !!tabId,
-    refetchInterval: 5000, // Refetch every 5 seconds to get updates
+    refetchInterval: 5000,
   });
 }

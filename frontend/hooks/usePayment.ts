@@ -2,8 +2,7 @@
 
 import { useCallback } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
+import { api } from "@/lib/api";
 
 interface PaymentData {
   paymentId: string;
@@ -46,23 +45,7 @@ export function usePayment() {
       throw new Error("Wallet not connected");
     }
 
-    const response = await fetch(`${BACKEND_URL}/api/payments/initiate`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        tabId,
-        payerAddress: address,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || "Failed to initiate payment");
-    }
-
-    return response.json();
+    return api.initiatePayment({ tabId, payerAddress: address });
   }, [address]);
 
   // Step 2: Sign permit using EIP-712
@@ -104,40 +87,23 @@ export function usePayment() {
     signature: string,
     deadline: string
   ): Promise<PaymentResult> => {
-    // Parse signature into v, r, s
-    const sig = signature.slice(2);
-    const r = "0x" + sig.slice(0, 64);
-    const s = "0x" + sig.slice(64, 128);
-    const v = parseInt(sig.slice(128, 130), 16);
-
-    const response = await fetch(`${BACKEND_URL}/api/payments/submit`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    try {
+      const result = await api.submitPayment({
         paymentId,
         signature,
-        deadline,
-        v,
-        r,
-        s,
-      }),
-    });
+        deadline: parseInt(deadline),
+      });
 
-    if (!response.ok) {
-      const error = await response.json();
+      return {
+        success: true,
+        txHash: result.txHash,
+      };
+    } catch (error) {
       return {
         success: false,
-        error: error.message || "Payment failed",
+        error: error instanceof Error ? error.message : "Payment failed",
       };
     }
-
-    const result = await response.json();
-    return {
-      success: true,
-      txHash: result.txHash,
-    };
   }, []);
 
   // Complete payment flow

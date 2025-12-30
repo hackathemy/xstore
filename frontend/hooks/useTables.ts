@@ -1,18 +1,15 @@
 import { ITableProps } from "@/types/tab";
 import { useQuery } from "@tanstack/react-query";
 
-const fetchTables = async (storeId: string): Promise<ITableProps[]> => {
-  const response = await fetch(`/api/tables?storeId=${storeId}`);
-  if (!response.ok) {
-    throw new Error("Failed to fetch tables");
-  }
-  return response.json();
-};
-
+// Tables are managed through the tabs system with tableNumber
+// This hook returns virtual table list based on store's tabs
 export default function useTables(storeId: string | undefined) {
-  return useQuery({
+  return useQuery<ITableProps[]>({
     queryKey: [`tables_${storeId}`],
-    queryFn: () => fetchTables(storeId!),
+    queryFn: async (): Promise<ITableProps[]> => {
+      // Tables are not separately managed - return empty for now
+      return [];
+    },
     enabled: !!storeId,
   });
 }

@@ -56,6 +56,35 @@ export class TabsService {
     });
   }
 
+  async findByCustomer(customerAddress: string) {
+    // Find tabs through payments made by this customer
+    return this.prisma.tab.findMany({
+      where: {
+        payments: {
+          some: {
+            payerAddress: customerAddress,
+          },
+        },
+      },
+      include: {
+        items: {
+          include: {
+            menuItem: true,
+          },
+        },
+        store: true,
+        payments: {
+          where: {
+            payerAddress: customerAddress,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  }
+
   async addItem(tabId: string, dto: AddItemDto) {
     const tab = await this.findOne(tabId);
 
