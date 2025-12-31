@@ -11,11 +11,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
 import React from "react";
 import { usePrivy } from "@privy-io/react-auth";
+import { USE_TEST_WALLET } from "@/context";
+import { useTestWallet } from "@/context/TestWalletContext";
+import { api } from "@/lib/api";
 
 const formSchema = z.object({
   name: z.string().default("").optional(),
@@ -30,14 +33,15 @@ type FormValues = z.infer<typeof formSchema>;
 
 export const MakeStore: React.FC = () => {
   const { user } = usePrivy();
-  const address = user?.wallet?.address;
+  const testWallet = USE_TEST_WALLET ? useTestWallet() : null;
+  const address = USE_TEST_WALLET ? testWallet?.address : user?.wallet?.address;
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      owner: address,
+      owner: address || "",
       name: "Phed Mark",
       menu: "Phed",
       description:
@@ -48,24 +52,28 @@ export const MakeStore: React.FC = () => {
     },
   });
 
+  // Update owner field when address changes
+  useEffect(() => {
+    if (address) {
+      form.setValue("owner", address);
+    }
+  }, [address, form]);
+
   const onSubmit = async (data: FormValues) => {
     try {
       setLoading(true);
       const formData = {
-        ...data,
-        price: String(data.price),
-        owner: address,
+        name: data.name || "",
+        menu: data.menu || "",
+        description: data.description || "",
+        image: data.image || "",
+        price: String(data.price || 0),
+        owner: address || "",
+        walletAddress: address || "",
       };
 
-      const response = await fetch("/api/stores", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to create store");
-      }
+      await api.createStore(formData);
+      console.log("✅ Store created successfully");
 
       router.replace("/");
       router.refresh();

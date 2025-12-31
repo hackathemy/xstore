@@ -41,18 +41,15 @@ export class PaymentsService {
       },
     });
 
-    // Generate payment data for signing (ERC-2612 permit or ERC-3009 transferWithAuthorization)
+    // Generate payment data for Move transaction
     const paymentData = await this.facilitatorService.generatePaymentData({
       paymentId: payment.id,
       from: dto.payerAddress,
       to: tab.store.walletAddress,
       amount: tab.total.toString(),
-      tokenAddress: process.env.USDC_ADDRESS || '',
     });
 
     return {
-      amount: tab.total,
-      tokenAddress: process.env.USDC_ADDRESS,
       ...paymentData,
     };
   }
@@ -64,14 +61,11 @@ export class PaymentsService {
       throw new BadRequestException('Payment is not in pending state');
     }
 
-    // Submit to facilitator for processing
+    // Verify transaction on Movement network
+    // In Move, the client submits txHash after executing the transaction
     const result = await this.facilitatorService.processPayment({
       paymentId: dto.paymentId,
-      signature: dto.signature,
-      deadline: dto.deadline,
-      v: dto.v,
-      r: dto.r,
-      s: dto.s,
+      txHash: dto.signature, // signature field contains txHash in Move
     });
 
     // Update payment status

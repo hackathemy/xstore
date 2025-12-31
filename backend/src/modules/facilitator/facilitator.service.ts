@@ -1,164 +1,140 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ethers, NonceManager } from 'ethers';
+import {
+  Aptos,
+  AptosConfig,
+  Account,
+  Ed25519PrivateKey,
+  AccountAddress,
+  InputGenerateTransactionPayloadData,
+} from '@aptos-labs/ts-sdk';
 import { PrismaService } from '../../common/prisma/prisma.service';
+
+// Movement Network Configuration
+interface MovementNetworkConfig {
+  name: string;
+  nodeUrl: string;
+  faucetUrl?: string;
+  chainId: number;
+}
+
+const MOVEMENT_TESTNET: MovementNetworkConfig = {
+  name: 'Movement Testnet',
+  nodeUrl: 'https://aptos.testnet.bardock.movementlabs.xyz/v1',
+  faucetUrl: 'https://faucet.testnet.bardock.movementlabs.xyz',
+  chainId: 250,
+};
+
+const MOVEMENT_LOCAL: MovementNetworkConfig = {
+  name: 'Movement Local',
+  nodeUrl: 'http://127.0.0.1:8080/v1',
+  faucetUrl: 'http://127.0.0.1:8081',
+  chainId: 4,
+};
+
+// MOVE decimals (8 for Aptos-compatible)
+const MOVE_DECIMALS = 8;
 
 interface PaymentDataParams {
   paymentId: string;
   from: string;
   to: string;
   amount: string;
-  tokenAddress: string;
+  tokenAddress?: string; // Not used in Move, kept for compatibility
 }
 
 interface ProcessPaymentParams {
   paymentId: string;
-  signature: string;
-  deadline: number;
-  v?: number;
-  r?: string;
-  s?: string;
+  txHash: string; // In Move, we verify txHash instead of processing signature
 }
 
 interface RefundDataParams {
   refundId: string;
-  from: string;  // Store wallet address
-  to: string;    // Customer address
+  from: string;
+  to: string;
   amount: string;
-  tokenAddress: string;
 }
-
-interface ProcessRefundParams {
-  refundId: string;
-  from: string;       // Store wallet
-  to: string;         // Customer wallet
-  amount: string;
-  tokenAddress: string;
-  signature: string;
-  deadline: number;
-  v?: number;
-  r?: string;
-  s?: string;
-}
-
-// ERC-2612 Permit + ERC20 ABI
-const TOKEN_ABI = [
-  'function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
-  'function transferFrom(address from, address to, uint256 amount) returns (bool)',
-  'function nonces(address owner) view returns (uint256)',
-  'function DOMAIN_SEPARATOR() view returns (bytes32)',
-  'function name() view returns (string)',
-  'function balanceOf(address account) view returns (uint256)',
-  'function allowance(address owner, address spender) view returns (uint256)',
-];
 
 @Injectable()
 export class FacilitatorService {
   private readonly logger = new Logger(FacilitatorService.name);
-  private provider: ethers.JsonRpcProvider;
-  private facilitatorWallet: ethers.Wallet | null = null;
-  private readonly chainId: number;
+  private client: Aptos;
+  private facilitatorAccount: Account | null = null;
+  private readonly networkConfig: MovementNetworkConfig;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {
-    const rpcUrl = this.configService.get<string>('RPC_URL') || 'https://mevm.testnet.imola.movementlabs.xyz';
-    this.chainId = this.configService.get<number>('CHAIN_ID') || 30732;
-    const privateKey = this.configService.get<string>('FACILITATOR_PRIVATE_KEY');
+    // Determine network
+    const isDev = this.configService.get<string>('NODE_ENV') === 'development';
+    this.networkConfig = isDev ? MOVEMENT_LOCAL : MOVEMENT_TESTNET;
 
-    this.provider = new ethers.JsonRpcProvider(rpcUrl);
-
-    if (privateKey) {
-      this.facilitatorWallet = new ethers.Wallet(privateKey, this.provider);
-      this.logger.log(`Facilitator wallet initialized: ${this.facilitatorWallet.address}`);
-    } else {
-      this.logger.warn('FACILITATOR_PRIVATE_KEY not set - x402 facilitator will not work');
+    // Override with config if provided
+    const nodeUrl = this.configService.get<string>('MOVEMENT_NODE_URL');
+    if (nodeUrl) {
+      this.networkConfig.nodeUrl = nodeUrl;
     }
+
+    // Initialize Aptos client
+    const config = new AptosConfig({
+      fullnode: this.networkConfig.nodeUrl,
+      faucet: this.networkConfig.faucetUrl,
+    });
+    this.client = new Aptos(config);
+
+    // Initialize facilitator account
+    const privateKey = this.configService.get<string>('FACILITATOR_PRIVATE_KEY');
+    if (privateKey) {
+      try {
+        const ed25519Key = new Ed25519PrivateKey(privateKey);
+        this.facilitatorAccount = Account.fromPrivateKey({ privateKey: ed25519Key });
+        this.logger.log(`Facilitator account initialized: ${this.facilitatorAccount.accountAddress.toString()}`);
+      } catch (error) {
+        this.logger.warn('Failed to initialize facilitator account. Using verification-only mode.');
+      }
+    } else {
+      this.logger.warn('FACILITATOR_PRIVATE_KEY not set - operating in verification-only mode');
+    }
+
+    this.logger.log(`Connected to ${this.networkConfig.name}: ${this.networkConfig.nodeUrl}`);
   }
 
   /**
-   * Get facilitator wallet address
+   * Get facilitator account address
    */
   getFacilitatorAddress(): string | null {
-    return this.facilitatorWallet?.address || null;
+    return this.facilitatorAccount?.accountAddress.toString() || null;
   }
 
   /**
-   * Generate EIP-712 typed data for permit signing
+   * Generate payment data for Move transaction
+   * Unlike EVM, Move doesn't need signatures for approval
+   * The client will directly execute the transfer
    */
   async generatePaymentData(params: PaymentDataParams) {
-    const { from, to, amount, tokenAddress, paymentId } = params;
+    const { from, to, amount, paymentId } = params;
 
-    if (!this.facilitatorWallet) {
-      throw new Error('Facilitator not configured');
-    }
-
-    const tokenContract = new ethers.Contract(tokenAddress, TOKEN_ABI, this.provider);
-
-    // Get nonce for the payer
-    const nonce = await tokenContract.nonces(from);
-    const name = await tokenContract.name();
-
-    // Calculate deadline (1 hour from now)
-    const deadline = Math.floor(Date.now() / 1000) + 3600;
-
-    // Convert amount to wei (assuming 18 decimals)
-    const amountWei = ethers.parseUnits(amount, 18);
-
-    // EIP-712 domain
-    const domain = {
-      name,
-      version: '1',
-      chainId: this.chainId,
-      verifyingContract: tokenAddress,
-    };
-
-    // Permit types
-    const types = {
-      Permit: [
-        { name: 'owner', type: 'address' },
-        { name: 'spender', type: 'address' },
-        { name: 'value', type: 'uint256' },
-        { name: 'nonce', type: 'uint256' },
-        { name: 'deadline', type: 'uint256' },
-      ],
-    };
-
-    // Permit message
-    const message = {
-      owner: from,
-      spender: this.facilitatorWallet.address,
-      value: amountWei.toString(),
-      nonce: nonce.toString(),
-      deadline,
-    };
+    // Convert amount to octas (8 decimals)
+    const amountInOctas = this.parseAmount(amount);
 
     return {
       paymentId,
-      domain,
-      types,
-      message,
-      primaryType: 'Permit',
-      deadline,
-      nonce: nonce.toString(),
-      facilitatorAddress: this.facilitatorWallet.address,
+      network: this.networkConfig.name,
+      moduleAddress: '0x1', // Native transfer module
+      function: '0x1::aptos_account::transfer',
       recipient: to,
-      amountWei: amountWei.toString(),
+      amount: amountInOctas.toString(),
+      amountFormatted: amount,
     };
   }
 
   /**
-   * Process payment with permit signature
-   * 1. Execute permit to approve facilitator
-   * 2. Execute transferFrom to move tokens from payer to merchant
+   * Process/verify payment transaction
+   * In Move, we verify the transaction was successful on-chain
    */
   async processPayment(params: ProcessPaymentParams): Promise<{ success: boolean; txHash?: string; error?: string }> {
-    const { paymentId, signature, deadline, v, r, s } = params;
-
-    if (!this.facilitatorWallet) {
-      return { success: false, error: 'Facilitator not configured' };
-    }
+    const { paymentId, txHash } = params;
 
     try {
       // Get payment details from database
@@ -175,233 +151,194 @@ export class FacilitatorService {
         return { success: false, error: 'Payment not found' };
       }
 
-      const tokenAddress = payment.tokenAddress;
-      const payer = payment.payerAddress;
-      const recipient = payment.tab.store.walletAddress;
-      const amount = ethers.parseUnits(payment.amount.toString(), 18);
+      // Verify transaction on-chain
+      const txInfo = await this.client.getTransactionByHash({ transactionHash: txHash });
 
-      this.logger.log(`Processing payment ${paymentId}:`);
-      this.logger.log(`  Payer: ${payer}`);
-      this.logger.log(`  Recipient: ${recipient}`);
-      this.logger.log(`  Amount: ${payment.amount}`);
-      this.logger.log(`  Token: ${tokenAddress}`);
-
-      // Parse signature components
-      let sigV = v;
-      let sigR = r;
-      let sigS = s;
-
-      if (!sigV || !sigR || !sigS) {
-        const sig = ethers.Signature.from(signature);
-        sigV = sig.v;
-        sigR = sig.r;
-        sigS = sig.s;
+      if (!txInfo) {
+        return { success: false, error: 'Transaction not found on chain' };
       }
 
-      // Use NonceManager to handle nonce synchronization properly
-      const managedWallet = new NonceManager(this.facilitatorWallet);
+      // Check if transaction was successful
+      if ('success' in txInfo && !txInfo.success) {
+        return { success: false, error: 'Transaction failed on chain' };
+      }
 
-      const tokenContract = new ethers.Contract(
-        tokenAddress,
-        TOKEN_ABI,
-        managedWallet,
-      );
-
-      // Step 1: Execute permit
-      this.logger.log('Executing permit...');
-      const permitTx = await tokenContract.permit(
-        payer,
-        this.facilitatorWallet.address,
-        amount,
-        deadline,
-        sigV,
-        sigR,
-        sigS,
-      );
-      await permitTx.wait();
-      this.logger.log(`Permit executed: ${permitTx.hash}`);
-
-      // Step 2: Execute transferFrom
-      this.logger.log('Executing transferFrom...');
-      const transferTx = await tokenContract.transferFrom(payer, recipient, amount);
-      const receipt = await transferTx.wait();
-      this.logger.log(`Transfer executed: ${transferTx.hash}`);
+      this.logger.log(`Payment ${paymentId} verified: ${txHash}`);
 
       return {
         success: true,
-        txHash: transferTx.hash,
+        txHash,
       };
     } catch (error) {
-      this.logger.error(`Payment processing failed: ${error}`);
+      this.logger.error(`Payment verification failed: ${error}`);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: error instanceof Error ? error.message : 'Verification failed',
       };
     }
   }
 
   /**
-   * Check if facilitator has enough gas for transactions
+   * Check facilitator account balance
    */
   async checkFacilitatorBalance(): Promise<{ hasBalance: boolean; balance: string }> {
-    if (!this.facilitatorWallet) {
+    if (!this.facilitatorAccount) {
       return { hasBalance: false, balance: '0' };
     }
 
-    const balance = await this.provider.getBalance(this.facilitatorWallet.address);
-    const hasBalance = balance > ethers.parseEther('0.001'); // Minimum 0.001 MOVE
+    try {
+      const resources = await this.client.getAccountResources({
+        accountAddress: this.facilitatorAccount.accountAddress,
+      });
 
-    return {
-      hasBalance,
-      balance: ethers.formatEther(balance),
-    };
+      const coinStore = resources.find(
+        (r) => r.type === '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>',
+      );
+
+      if (coinStore) {
+        const balance = (coinStore.data as { coin: { value: string } }).coin.value;
+        const formattedBalance = this.formatAmount(BigInt(balance));
+        return {
+          hasBalance: BigInt(balance) > BigInt(1000000), // > 0.01 MOVE
+          balance: formattedBalance,
+        };
+      }
+
+      return { hasBalance: false, balance: '0' };
+    } catch (error) {
+      this.logger.error('Error checking balance:', error);
+      return { hasBalance: false, balance: '0' };
+    }
   }
 
   /**
    * Get token balance for an address
    */
-  async getTokenBalance(tokenAddress: string, address: string): Promise<string> {
-    const tokenContract = new ethers.Contract(tokenAddress, TOKEN_ABI, this.provider);
-    const balance = await tokenContract.balanceOf(address);
-    return ethers.formatUnits(balance, 18);
+  async getTokenBalance(address: string): Promise<string> {
+    try {
+      const resources = await this.client.getAccountResources({
+        accountAddress: AccountAddress.from(address),
+      });
+
+      const coinStore = resources.find(
+        (r) => r.type === '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>',
+      );
+
+      if (coinStore) {
+        const balance = (coinStore.data as { coin: { value: string } }).coin.value;
+        return this.formatAmount(BigInt(balance));
+      }
+
+      return '0';
+    } catch (error) {
+      return '0';
+    }
   }
 
   /**
-   * Generate EIP-712 typed data for refund permit signing (store signs this)
+   * Generate refund data
    */
   async generateRefundData(params: RefundDataParams) {
-    const { from, to, amount, tokenAddress, refundId } = params;
-
-    if (!this.facilitatorWallet) {
-      throw new Error('Facilitator not configured');
-    }
-
-    const tokenContract = new ethers.Contract(tokenAddress, TOKEN_ABI, this.provider);
-
-    // Get nonce for the store (signer)
-    const nonce = await tokenContract.nonces(from);
-    const name = await tokenContract.name();
-
-    // Calculate deadline (1 hour from now)
-    const deadline = Math.floor(Date.now() / 1000) + 3600;
-
-    // Convert amount to wei (assuming 18 decimals)
-    const amountWei = ethers.parseUnits(amount, 18);
-
-    // EIP-712 domain
-    const domain = {
-      name,
-      version: '1',
-      chainId: this.chainId,
-      verifyingContract: tokenAddress,
-    };
-
-    // Permit types
-    const types = {
-      Permit: [
-        { name: 'owner', type: 'address' },
-        { name: 'spender', type: 'address' },
-        { name: 'value', type: 'uint256' },
-        { name: 'nonce', type: 'uint256' },
-        { name: 'deadline', type: 'uint256' },
-      ],
-    };
-
-    // Permit message - store allows facilitator to transfer tokens
-    const message = {
-      owner: from,  // Store wallet
-      spender: this.facilitatorWallet.address,
-      value: amountWei.toString(),
-      nonce: nonce.toString(),
-      deadline,
-    };
+    const { from, to, amount, refundId } = params;
+    const amountInOctas = this.parseAmount(amount);
 
     return {
       refundId,
-      domain,
-      types,
-      message,
-      primaryType: 'Permit',
-      deadline,
-      nonce: nonce.toString(),
-      facilitatorAddress: this.facilitatorWallet.address,
-      recipient: to,  // Customer wallet
-      amountWei: amountWei.toString(),
+      network: this.networkConfig.name,
+      moduleAddress: '0x1',
+      function: '0x1::aptos_account::transfer',
+      from,
+      recipient: to,
+      amount: amountInOctas.toString(),
+      amountFormatted: amount,
     };
   }
 
   /**
-   * Process refund with permit signature
-   * 1. Execute permit to approve facilitator (signed by store)
-   * 2. Execute transferFrom to move tokens from store to customer
+   * Process refund (if facilitator has funds)
    */
-  async processRefund(params: ProcessRefundParams): Promise<{ success: boolean; txHash?: string; error?: string }> {
-    const { refundId, from, to, amount, tokenAddress, signature, deadline, v, r, s } = params;
-
-    if (!this.facilitatorWallet) {
-      return { success: false, error: 'Facilitator not configured' };
+  async processRefund(params: {
+    refundId: string;
+    to: string;
+    amount: string;
+  }): Promise<{ success: boolean; txHash?: string; error?: string }> {
+    if (!this.facilitatorAccount) {
+      return { success: false, error: 'Facilitator account not configured' };
     }
 
     try {
-      const amountWei = ethers.parseUnits(amount, 18);
+      const amountInOctas = this.parseAmount(params.amount);
 
-      this.logger.log(`Processing refund ${refundId}:`);
-      this.logger.log(`  From (Store): ${from}`);
-      this.logger.log(`  To (Customer): ${to}`);
-      this.logger.log(`  Amount: ${amount}`);
-      this.logger.log(`  Token: ${tokenAddress}`);
+      const payload: InputGenerateTransactionPayloadData = {
+        function: '0x1::aptos_account::transfer',
+        functionArguments: [
+          AccountAddress.from(params.to),
+          amountInOctas,
+        ],
+      };
 
-      // Parse signature components
-      let sigV = v;
-      let sigR = r;
-      let sigS = s;
+      // Build transaction
+      const transaction = await this.client.transaction.build.simple({
+        sender: this.facilitatorAccount.accountAddress,
+        data: payload,
+      });
 
-      if (!sigV || !sigR || !sigS) {
-        const sig = ethers.Signature.from(signature);
-        sigV = sig.v;
-        sigR = sig.r;
-        sigS = sig.s;
-      }
+      // Sign transaction
+      const senderAuthenticator = this.client.transaction.sign({
+        signer: this.facilitatorAccount,
+        transaction,
+      });
 
-      // Use NonceManager to handle nonce synchronization properly
-      const managedWallet = new NonceManager(this.facilitatorWallet);
+      // Submit transaction
+      const pendingTx = await this.client.transaction.submit.simple({
+        transaction,
+        senderAuthenticator,
+      });
 
-      const tokenContract = new ethers.Contract(
-        tokenAddress,
-        TOKEN_ABI,
-        managedWallet,
-      );
+      // Wait for confirmation
+      const txResult = await this.client.waitForTransaction({
+        transactionHash: pendingTx.hash,
+      });
 
-      // Step 1: Execute permit (store approved facilitator)
-      this.logger.log('Executing refund permit...');
-      const permitTx = await tokenContract.permit(
-        from,  // Store wallet (owner)
-        this.facilitatorWallet.address,
-        amountWei,
-        deadline,
-        sigV,
-        sigR,
-        sigS,
-      );
-      await permitTx.wait();
-      this.logger.log(`Refund permit executed: ${permitTx.hash}`);
-
-      // Step 2: Execute transferFrom (store to customer)
-      this.logger.log('Executing refund transfer...');
-      const transferTx = await tokenContract.transferFrom(from, to, amountWei);
-      await transferTx.wait();
-      this.logger.log(`Refund transfer executed: ${transferTx.hash}`);
+      this.logger.log(`Refund ${params.refundId} processed: ${txResult.hash}`);
 
       return {
         success: true,
-        txHash: transferTx.hash,
+        txHash: txResult.hash,
       };
     } catch (error) {
       this.logger.error(`Refund processing failed: ${error}`);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: error instanceof Error ? error.message : 'Refund failed',
       };
     }
+  }
+
+  /**
+   * Parse amount string to octas (8 decimals)
+   */
+  private parseAmount(amount: string): bigint {
+    const num = parseFloat(amount);
+    return BigInt(Math.floor(num * Math.pow(10, MOVE_DECIMALS)));
+  }
+
+  /**
+   * Format octas to human-readable amount
+   */
+  private formatAmount(octas: bigint): string {
+    return (Number(octas) / Math.pow(10, MOVE_DECIMALS)).toFixed(MOVE_DECIMALS);
+  }
+
+  /**
+   * Get network info
+   */
+  getNetworkInfo() {
+    return {
+      name: this.networkConfig.name,
+      nodeUrl: this.networkConfig.nodeUrl,
+      chainId: this.networkConfig.chainId,
+      facilitatorAddress: this.getFacilitatorAddress(),
+    };
   }
 }

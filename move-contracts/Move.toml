@@ -1,0 +1,17 @@
+[package]
+name = "XStorePayment"
+version = "1.0.0"
+authors = ["XStore Team"]
+
+[addresses]
+xstore = "_"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework/", rev = "mainnet" }
+AptosStdlib = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-stdlib/", rev = "mainnet" }
+MoveStdlib = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/move-stdlib/", rev = "mainnet" }
+
+[dev-addresses]
+xstore = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+[dev-dependencies]

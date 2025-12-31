@@ -4,8 +4,12 @@ import { PrivyProvider } from "@privy-io/react-auth";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactNode } from "react";
 import { movementTestnet } from "@/lib/chains";
+import { TestWalletProvider } from "./TestWalletContext";
 
 const queryClient = new QueryClient();
+
+// Set to true to use test wallet instead of Privy
+export const USE_TEST_WALLET = true;
 
 export default function Providers({ children }: { children: ReactNode }) {
   return (
@@ -25,7 +29,13 @@ export default function Providers({ children }: { children: ReactNode }) {
         },
       }}
     >
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        {USE_TEST_WALLET ? (
+          <TestWalletProvider>{children}</TestWalletProvider>
+        ) : (
+          children
+        )}
+      </QueryClientProvider>
     </PrivyProvider>
   );
 }

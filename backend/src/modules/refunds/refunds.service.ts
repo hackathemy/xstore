@@ -164,22 +164,19 @@ export class RefundsService {
       throw new BadRequestException('Refund must be approved before getting permit data');
     }
 
-    const tokenAddress = refund.payment.tokenAddress;
     const storeWallet = refund.payment.tab.store.walletAddress;
     const customerWallet = refund.payment.payerAddress;
 
-    const permitData = await this.facilitatorService.generateRefundData({
+    // Generate Move transaction data for refund
+    const refundData = await this.facilitatorService.generateRefundData({
       refundId: id,
       from: storeWallet,
       to: customerWallet,
       amount: refund.amount.toString(),
-      tokenAddress,
     });
 
     return {
-      amount: refund.amount,
-      tokenAddress,
-      ...permitData,
+      ...refundData,
     };
   }
 
@@ -191,27 +188,17 @@ export class RefundsService {
     }
 
     try {
-      const tokenAddress = refund.payment.tokenAddress;
-      const storeWallet = refund.payment.tab.store.walletAddress;
       const customerWallet = refund.payment.payerAddress;
 
       this.logger.log(`Processing refund ${id}:`);
-      this.logger.log(`  From (Store): ${storeWallet}`);
       this.logger.log(`  To (Customer): ${customerWallet}`);
       this.logger.log(`  Amount: ${refund.amount}`);
 
-      // Execute on-chain refund via facilitator
+      // Execute on-chain refund via facilitator (Move transaction)
       const result = await this.facilitatorService.processRefund({
         refundId: id,
-        from: storeWallet,
         to: customerWallet,
         amount: refund.amount.toString(),
-        tokenAddress,
-        signature: dto.signature,
-        deadline: dto.deadline,
-        v: dto.v,
-        r: dto.r,
-        s: dto.s,
       });
 
       if (!result.success) {

@@ -2,10 +2,42 @@
 
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "./ui/button";
+import { USE_TEST_WALLET } from "@/context";
+import { useTestWallet } from "@/context/TestWalletContext";
 
 export function LoginButton() {
   const { ready, authenticated, login, logout, user } = usePrivy();
+  const testWallet = USE_TEST_WALLET ? useTestWallet() : null;
 
+  // Test wallet mode - show connected status
+  if (USE_TEST_WALLET && testWallet) {
+    if (testWallet.isConnected && testWallet.address) {
+      const shortAddress = `${testWallet.address.slice(0, 6)}...${testWallet.address.slice(-4)}`;
+      return (
+        <Button
+          variant="outline"
+          onClick={testWallet.disconnect}
+          className="border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400"
+        >
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs mr-1">🧪</span>
+            {shortAddress}
+          </div>
+        </Button>
+      );
+    }
+    return (
+      <Button
+        onClick={testWallet.connect}
+        className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 font-medium"
+      >
+        🧪 Connect Test
+      </Button>
+    );
+  }
+
+  // Privy mode
   if (!ready) {
     return (
       <Button disabled className="bg-white/10 border-white/10">

@@ -23,15 +23,17 @@ export class FacilitatorController {
   }
 
   @Get('token-balance')
-  @ApiOperation({ summary: 'Get token balance for an address' })
+  @ApiOperation({ summary: 'Get MOVE token balance for an address' })
   async getTokenBalance(
-    @Query('token') tokenAddress: string,
     @Query('address') address: string,
   ) {
-    const balance = await this.facilitatorService.getTokenBalance(
-      tokenAddress,
-      address,
-    );
+    const balance = await this.facilitatorService.getTokenBalance(address);
     return { balance };
+  }
+
+  @Get('network')
+  @ApiOperation({ summary: 'Get Movement network info' })
+  getNetworkInfo() {
+    return this.facilitatorService.getNetworkInfo();
   }
 }

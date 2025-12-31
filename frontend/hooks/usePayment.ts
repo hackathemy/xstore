@@ -1,29 +1,23 @@
 "use client";
 
 import { useCallback } from "react";
-import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { usePrivy } from "@privy-io/react-auth";
+import { AccountAddress, InputGenerateTransactionPayloadData } from "@aptos-labs/ts-sdk";
 import { api } from "@/lib/api";
+import { USE_TEST_WALLET } from "@/context";
+import { useTestWallet } from "@/context/TestWalletContext";
+import { parseMoveAmount, getActiveNetwork } from "@/lib/movement";
+
+// Payment module address (deployed on Movement)
+const PAYMENT_MODULE_ADDRESS = process.env.NEXT_PUBLIC_PAYMENT_MODULE_ADDRESS ||
+  "0x1"; // Default to framework address
 
 interface PaymentData {
   paymentId: string;
   amount: string;
-  tokenAddress: string;
-  domain: {
-    name: string;
-    version: string;
-    chainId: number;
-    verifyingContract: string;
-  };
-  types: {
-    Permit: Array<{ name: string; type: string }>;
-  };
-  message: {
-    owner: string;
-    spender: string;
-    value: string;
-    nonce: string;
-    deadline: string;
-  };
+  recipient: string;
+  moduleAddress: string;
+  network: string;
 }
 
 interface PaymentResult {
@@ -34,12 +28,12 @@ interface PaymentResult {
 
 export function usePayment() {
   const { user } = usePrivy();
-  const { wallets } = useWallets();
+  const testWallet = USE_TEST_WALLET ? useTestWallet() : null;
 
-  const address = user?.wallet?.address;
-  const wallet = wallets.find((w) => w.address === address);
+  // Use test wallet address if available, otherwise use Privy wallet
+  const address = USE_TEST_WALLET ? testWallet?.address : user?.wallet?.address;
 
-  // Step 1: Initiate payment - get EIP-712 typed data from backend
+  // Step 1: Initiate payment - get payment details from backend
   const initiatePayment = useCallback(async (tabId: string): Promise<PaymentData> => {
     if (!address) {
       throw new Error("Wallet not connected");
@@ -48,60 +42,64 @@ export function usePayment() {
     return api.initiatePayment({ tabId, payerAddress: address });
   }, [address]);
 
-  // Step 2: Sign permit using EIP-712
-  const signPermit = useCallback(async (paymentData: PaymentData): Promise<string> => {
-    if (!wallet || !address) {
+  // Step 2: Execute payment transaction on Movement
+  const executePayment = useCallback(async (paymentData: PaymentData): Promise<string> => {
+    if (!address) {
       throw new Error("Wallet not connected");
     }
 
-    const provider = await wallet.getEthereumProvider();
+    // Use test wallet for transaction
+    if (USE_TEST_WALLET && testWallet) {
+      const amountInOctas = parseMoveAmount(parseFloat(paymentData.amount));
 
-    // Construct EIP-712 typed data
-    const typedData = {
-      types: {
-        EIP712Domain: [
-          { name: "name", type: "string" },
-          { name: "version", type: "string" },
-          { name: "chainId", type: "uint256" },
-          { name: "verifyingContract", type: "address" },
+      // Option 1: Direct coin transfer (simple)
+      // This uses the native aptos_account::transfer function
+      const payload: InputGenerateTransactionPayloadData = {
+        function: "0x1::aptos_account::transfer",
+        functionArguments: [
+          AccountAddress.from(paymentData.recipient),
+          amountInOctas,
         ],
-        ...paymentData.types,
-      },
-      primaryType: "Permit",
-      domain: paymentData.domain,
-      message: paymentData.message,
-    };
+      };
 
-    // Sign using eth_signTypedData_v4
-    const signature = await provider.request({
-      method: "eth_signTypedData_v4",
-      params: [address, JSON.stringify(typedData)],
-    });
+      // Option 2: Use custom payment module (if deployed)
+      // const payload: InputGenerateTransactionPayloadData = {
+      //   function: `${PAYMENT_MODULE_ADDRESS}::payment::pay`,
+      //   functionArguments: [
+      //     paymentData.paymentId,
+      //     AccountAddress.from(paymentData.recipient),
+      //     amountInOctas,
+      //   ],
+      // };
 
-    return signature as string;
-  }, [wallet, address]);
+      const txHash = await testWallet.signAndSubmitTransaction(payload);
+      return txHash;
+    }
 
-  // Step 3: Submit signed permit to backend
-  const submitPayment = useCallback(async (
+    // For Privy wallet - not yet implemented
+    throw new Error("Privy Movement wallet integration not yet implemented. Use test wallet mode.");
+  }, [address, testWallet]);
+
+  // Step 3: Submit payment confirmation to backend
+  const confirmPayment = useCallback(async (
     paymentId: string,
-    signature: string,
-    deadline: string
+    txHash: string,
   ): Promise<PaymentResult> => {
     try {
       const result = await api.submitPayment({
         paymentId,
-        signature,
-        deadline: parseInt(deadline),
+        signature: txHash, // In Move, we send txHash instead of signature
+        deadline: Math.floor(Date.now() / 1000) + 3600, // 1 hour validity
       });
 
       return {
         success: true,
-        txHash: result.txHash,
+        txHash: result.txHash || txHash,
       };
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Payment failed",
+        error: error instanceof Error ? error.message : "Payment confirmation failed",
       };
     }
   }, []);
@@ -109,18 +107,16 @@ export function usePayment() {
   // Complete payment flow
   const payTab = useCallback(async (tabId: string): Promise<PaymentResult> => {
     try {
-      // Step 1: Initiate and get permit data
+      // Step 1: Initiate and get payment data
       const paymentData = await initiatePayment(tabId);
+      console.log("📋 Payment initiated:", paymentData);
 
-      // Step 2: Sign permit
-      const signature = await signPermit(paymentData);
+      // Step 2: Execute Move transaction
+      const txHash = await executePayment(paymentData);
+      console.log("✅ Transaction submitted:", txHash);
 
-      // Step 3: Submit payment
-      const result = await submitPayment(
-        paymentData.paymentId,
-        signature,
-        paymentData.message.deadline
-      );
+      // Step 3: Confirm payment with backend
+      const result = await confirmPayment(paymentData.paymentId, txHash);
 
       return result;
     } catch (error) {
@@ -130,13 +126,39 @@ export function usePayment() {
         error: error instanceof Error ? error.message : "Payment failed",
       };
     }
-  }, [initiatePayment, signPermit, submitPayment]);
+  }, [initiatePayment, executePayment, confirmPayment]);
+
+  // Direct transfer (without backend involvement)
+  const directTransfer = useCallback(async (
+    to: string,
+    amount: number,
+  ): Promise<PaymentResult> => {
+    if (!address) {
+      return { success: false, error: "Wallet not connected" };
+    }
+
+    try {
+      if (USE_TEST_WALLET && testWallet) {
+        const txHash = await testWallet.transferCoin(to, amount);
+        return { success: true, txHash };
+      }
+
+      return { success: false, error: "Privy Movement not implemented" };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Transfer failed",
+      };
+    }
+  }, [address, testWallet]);
 
   return {
     payTab,
+    directTransfer,
     initiatePayment,
-    signPermit,
-    submitPayment,
+    executePayment,
+    confirmPayment,
     isConnected: !!address,
+    network: getActiveNetwork(),
   };
 }

@@ -64,12 +64,18 @@ export default function StoresPage() {
             >
               {/* Image */}
               <div className="relative h-48 w-full overflow-hidden">
-                <Image
-                  src={store.image}
-                  alt={store.name}
-                  fill
-                  className="object-cover transition-transform duration-500 group-hover:scale-110"
-                />
+                {store.image && !store.image.includes('example.com') ? (
+                  <Image
+                    src={store.image}
+                    alt={store.name}
+                    fill
+                    className="object-cover transition-transform duration-500 group-hover:scale-110"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center">
+                    <span className="text-6xl">🏪</span>
+                  </div>
+                )}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
               </div>
 
