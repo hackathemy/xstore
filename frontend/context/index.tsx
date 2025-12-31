@@ -3,12 +3,12 @@
 import { PrivyProvider } from "@privy-io/react-auth";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactNode } from "react";
-import { movementTestnet } from "@/lib/chains";
 import { TestWalletProvider } from "./TestWalletContext";
 
 const queryClient = new QueryClient();
 
 // Set to true to use test wallet instead of Privy
+// Currently using test wallet as Privy Movement integration is in progress
 export const USE_TEST_WALLET = true;
 
 export default function Providers({ children }: { children: ReactNode }) {
@@ -22,8 +22,8 @@ export default function Providers({ children }: { children: ReactNode }) {
           logo: "/xstore.svg",
         },
         loginMethods: ["email", "wallet", "google"],
-        defaultChain: movementTestnet,
-        supportedChains: [movementTestnet],
+        // Movement Network uses Move Native, not EVM
+        // Privy wallet integration pending - using test wallet for now
         embeddedWallets: {
           createOnLogin: "users-without-wallets",
         },

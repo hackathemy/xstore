@@ -6,18 +6,30 @@ import { AccountAddress, InputGenerateTransactionPayloadData } from "@aptos-labs
 import { api } from "@/lib/api";
 import { USE_TEST_WALLET } from "@/context";
 import { useTestWallet } from "@/context/TestWalletContext";
-import { parseMoveAmount, getActiveNetwork } from "@/lib/movement";
+import {
+  parseMoveAmount,
+  parseStablecoinAmount,
+  getActiveNetwork,
+  getPaymentStablecoin,
+  getStablecoinType,
+  MOVE_COIN_TYPE,
+} from "@/lib/movement";
 
 // Payment module address (deployed on Movement)
 const PAYMENT_MODULE_ADDRESS = process.env.NEXT_PUBLIC_PAYMENT_MODULE_ADDRESS ||
   "0x1"; // Default to framework address
 
+// Use stablecoin for payments by default
+const USE_STABLECOIN = process.env.NEXT_PUBLIC_USE_STABLECOIN !== "false";
+
 interface PaymentData {
   paymentId: string;
   amount: string;
+  amountFormatted?: string;
   recipient: string;
   moduleAddress: string;
   network: string;
+  coinType?: string; // Coin type for payment (USDC, USDT, MOVE, etc.)
 }
 
 interface PaymentResult {
@@ -33,14 +45,23 @@ export function usePayment() {
   // Use test wallet address if available, otherwise use Privy wallet
   const address = USE_TEST_WALLET ? testWallet?.address : user?.wallet?.address;
 
+  // Get the stablecoin config for payments
+  const stablecoin = getPaymentStablecoin();
+
   // Step 1: Initiate payment - get payment details from backend
   const initiatePayment = useCallback(async (tabId: string): Promise<PaymentData> => {
     if (!address) {
       throw new Error("Wallet not connected");
     }
 
-    return api.initiatePayment({ tabId, payerAddress: address });
-  }, [address]);
+    const data = await api.initiatePayment({ tabId, payerAddress: address });
+
+    // Add coin type for stablecoin payments
+    return {
+      ...data,
+      coinType: USE_STABLECOIN ? stablecoin.coinType : MOVE_COIN_TYPE,
+    };
+  }, [address, stablecoin.coinType]);
 
   // Step 2: Execute payment transaction on Movement
   const executePayment = useCallback(async (paymentData: PaymentData): Promise<string> => {
@@ -50,35 +71,54 @@ export function usePayment() {
 
     // Use test wallet for transaction
     if (USE_TEST_WALLET && testWallet) {
-      const amountInOctas = parseMoveAmount(parseFloat(paymentData.amount));
+      const coinType = paymentData.coinType || stablecoin.coinType;
+      const isStablecoin = coinType !== MOVE_COIN_TYPE;
 
-      // Option 1: Direct coin transfer (simple)
-      // This uses the native aptos_account::transfer function
-      const payload: InputGenerateTransactionPayloadData = {
-        function: "0x1::aptos_account::transfer",
-        functionArguments: [
-          AccountAddress.from(paymentData.recipient),
-          amountInOctas,
-        ],
-      };
+      if (isStablecoin) {
+        // Stablecoin payment (USDC, USDT, etc.)
+        console.log("💵 Executing stablecoin payment:", {
+          coinType,
+          amount: paymentData.amount,
+          recipient: paymentData.recipient,
+        });
 
-      // Option 2: Use custom payment module (if deployed)
-      // const payload: InputGenerateTransactionPayloadData = {
-      //   function: `${PAYMENT_MODULE_ADDRESS}::payment::pay`,
-      //   functionArguments: [
-      //     paymentData.paymentId,
-      //     AccountAddress.from(paymentData.recipient),
-      //     amountInOctas,
-      //   ],
-      // };
+        // Use coin::transfer with type argument for stablecoins
+        const amountInSmallestUnit = parseStablecoinAmount(
+          parseFloat(paymentData.amount),
+          stablecoin.decimals
+        );
 
-      const txHash = await testWallet.signAndSubmitTransaction(payload);
-      return txHash;
+        const payload: InputGenerateTransactionPayloadData = {
+          function: "0x1::coin::transfer",
+          typeArguments: [coinType],
+          functionArguments: [
+            AccountAddress.from(paymentData.recipient),
+            amountInSmallestUnit,
+          ],
+        };
+
+        const txHash = await testWallet.signAndSubmitTransaction(payload);
+        return txHash;
+      } else {
+        // Native MOVE payment
+        const amountInOctas = parseMoveAmount(parseFloat(paymentData.amount));
+
+        const payload: InputGenerateTransactionPayloadData = {
+          function: "0x1::aptos_account::transfer",
+          functionArguments: [
+            AccountAddress.from(paymentData.recipient),
+            amountInOctas,
+          ],
+        };
+
+        const txHash = await testWallet.signAndSubmitTransaction(payload);
+        return txHash;
+      }
     }
 
     // For Privy wallet - not yet implemented
     throw new Error("Privy Movement wallet integration not yet implemented. Use test wallet mode.");
-  }, [address, testWallet]);
+  }, [address, testWallet, stablecoin]);
 
   // Step 3: Submit payment confirmation to backend
   const confirmPayment = useCallback(async (
@@ -128,7 +168,32 @@ export function usePayment() {
     }
   }, [initiatePayment, executePayment, confirmPayment]);
 
-  // Direct transfer (without backend involvement)
+  // Direct stablecoin transfer (without backend involvement)
+  const directStablecoinTransfer = useCallback(async (
+    to: string,
+    amount: number,
+    coinType?: string,
+  ): Promise<PaymentResult> => {
+    if (!address) {
+      return { success: false, error: "Wallet not connected" };
+    }
+
+    try {
+      if (USE_TEST_WALLET && testWallet) {
+        const txHash = await testWallet.transferStablecoin(to, amount, coinType);
+        return { success: true, txHash };
+      }
+
+      return { success: false, error: "Privy Movement not implemented" };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Transfer failed",
+      };
+    }
+  }, [address, testWallet]);
+
+  // Direct MOVE transfer (without backend involvement)
   const directTransfer = useCallback(async (
     to: string,
     amount: number,
@@ -155,10 +220,13 @@ export function usePayment() {
   return {
     payTab,
     directTransfer,
+    directStablecoinTransfer,
     initiatePayment,
     executePayment,
     confirmPayment,
     isConnected: !!address,
     network: getActiveNetwork(),
+    stablecoin, // Expose current stablecoin config
+    useStablecoin: USE_STABLECOIN,
   };
 }

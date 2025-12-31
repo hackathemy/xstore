@@ -15,8 +15,13 @@ import {
   formatMoveAddress,
   parseMoveAmount,
   formatMoveAmount,
+  parseStablecoinAmount,
+  formatStablecoinAmount,
   MOVE_COIN_TYPE,
   MOVE_DECIMALS,
+  getPaymentStablecoin,
+  getStablecoinType,
+  StablecoinConfig,
 } from "@/lib/movement";
 
 // Test private key (Ed25519) - Generate a new one for testing
@@ -30,9 +35,11 @@ interface TestWalletContextType {
   connect: () => Promise<void>;
   disconnect: () => void;
   getBalance: () => Promise<string>;
+  getStablecoinBalance: (coinType?: string) => Promise<string>;
   signAndSubmitTransaction: (payload: InputGenerateTransactionPayloadData) => Promise<string>;
   signMessage: (message: string) => Promise<string>;
   transferCoin: (to: string, amount: number) => Promise<string>;
+  transferStablecoin: (to: string, amount: number, coinType?: string) => Promise<string>;
   getClient: () => Aptos;
   getAccount: () => Account;
 }
@@ -155,6 +162,62 @@ export function TestWalletProvider({ children }: { children: ReactNode }) {
     return signAndSubmitTransaction(payload);
   }, [address, signAndSubmitTransaction]);
 
+  // Get stablecoin balance (USDC, USDT, etc.)
+  const getStablecoinBalance = useCallback(async (coinType?: string): Promise<string> => {
+    if (!address) return "0";
+
+    const targetCoinType = coinType || getPaymentStablecoin().coinType;
+    const stablecoin = getPaymentStablecoin();
+
+    try {
+      const resources = await client.getAccountResources({
+        accountAddress: AccountAddress.from(address),
+      });
+
+      const coinStore = resources.find(
+        (r) => r.type === `0x1::coin::CoinStore<${targetCoinType}>`
+      );
+
+      if (coinStore) {
+        const balance = (coinStore.data as { coin: { value: string } }).coin.value;
+        return formatStablecoinAmount(BigInt(balance), stablecoin.decimals);
+      }
+      return "0";
+    } catch (error) {
+      console.error("Error fetching stablecoin balance:", error);
+      return "0";
+    }
+  }, [address, client]);
+
+  // Transfer stablecoin (USDC, USDT, etc.) using coin::transfer
+  const transferStablecoin = useCallback(async (
+    to: string,
+    amount: number,
+    coinType?: string
+  ): Promise<string> => {
+    if (!address) throw new Error("Wallet not connected");
+
+    const stablecoin = getPaymentStablecoin();
+    const targetCoinType = coinType || stablecoin.coinType;
+    const amountInSmallestUnit = parseStablecoinAmount(amount, stablecoin.decimals);
+
+    // Use coin::transfer with type argument for stablecoins
+    const payload: InputGenerateTransactionPayloadData = {
+      function: "0x1::coin::transfer",
+      typeArguments: [targetCoinType],
+      functionArguments: [AccountAddress.from(to), amountInSmallestUnit],
+    };
+
+    console.log("💵 Transferring stablecoin:", {
+      coinType: targetCoinType,
+      amount,
+      amountInSmallestUnit: amountInSmallestUnit.toString(),
+      to,
+    });
+
+    return signAndSubmitTransaction(payload);
+  }, [address, signAndSubmitTransaction]);
+
   const getClient = useCallback(() => client, [client]);
   const getAccount = useCallback(() => account, [account]);
 
@@ -171,9 +234,11 @@ export function TestWalletProvider({ children }: { children: ReactNode }) {
         connect,
         disconnect,
         getBalance,
+        getStablecoinBalance,
         signAndSubmitTransaction,
         signMessage,
         transferCoin,
+        transferStablecoin,
         getClient,
         getAccount,
       }}

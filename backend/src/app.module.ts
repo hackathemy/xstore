@@ -13,6 +13,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { FacilitatorModule } from './modules/facilitator/facilitator.module';
 import { SettlementsModule } from './modules/settlements/settlements.module';
 import { RefundsModule } from './modules/refunds/refunds.module';
+import { X402Module } from './modules/x402/x402.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { RefundsModule } from './modules/refunds/refunds.module';
     FacilitatorModule,
     SettlementsModule,
     RefundsModule,
+    X402Module,
   ],
 })
 export class AppModule {}

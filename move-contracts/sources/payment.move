@@ -1,10 +1,11 @@
 /// XStore Payment Module for Movement Network
-/// Handles restaurant POS payments with payment tracking and events
+/// Handles restaurant POS payments with stablecoin support (USDC, USDT, etc.)
+/// Uses generic coin types to support any Move coin standard token
 module xstore::payment {
     use std::signer;
     use std::string::String;
     use std::vector;
-    use aptos_framework::coin;
+    use aptos_framework::coin::{Self, Coin};
     use aptos_framework::aptos_coin::AptosCoin;
     use aptos_framework::event;
     use aptos_framework::timestamp;
@@ -18,6 +19,7 @@ module xstore::payment {
     const E_INVALID_AMOUNT: u64 = 5;
     const E_STORE_ALREADY_REGISTERED: u64 = 6;
     const E_REFUND_EXCEEDS_PAYMENT: u64 = 7;
+    const E_COIN_NOT_REGISTERED: u64 = 8;
 
     /// Store configuration
     struct Store has key {
@@ -29,7 +31,7 @@ module xstore::payment {
         is_active: bool,
     }
 
-    /// Payment record
+    /// Payment record (coin type agnostic)
     struct PaymentRecord has store, drop, copy {
         payment_id: String,
         payer: address,
@@ -51,6 +53,7 @@ module xstore::payment {
         payer: address,
         store: address,
         amount: u64,
+        coin_type: String,
         timestamp: u64,
     }
 
@@ -60,6 +63,7 @@ module xstore::payment {
         store: address,
         recipient: address,
         amount: u64,
+        coin_type: String,
         timestamp: u64,
     }
 
@@ -108,9 +112,12 @@ module xstore::payment {
         });
     }
 
-    /// Process a payment from payer to store
-    /// This is the main payment function
-    public entry fun pay(
+    /// Generic payment function - works with any coin type (USDC, USDT, MOVE, etc.)
+    /// CoinType can be:
+    /// - 0x1::aptos_coin::AptosCoin (native MOVE)
+    /// - {deployer}::usdc::USDC (stablecoin)
+    /// - {deployer}::usdt::USDT (stablecoin)
+    public entry fun pay<CoinType>(
         payer: &signer,
         payment_id: String,
         store_address: address,
@@ -126,9 +133,9 @@ module xstore::payment {
         let store = borrow_global_mut<Store>(store_address);
         assert!(store.is_active, E_STORE_NOT_REGISTERED);
 
-        // Transfer coins
-        let coins = coin::withdraw<AptosCoin>(payer, amount);
-        coin::deposit(store.wallet_address, coins);
+        // Transfer coins using generic coin type
+        let coins = coin::withdraw<CoinType>(payer, amount);
+        coin::deposit<CoinType>(store.wallet_address, coins);
 
         // Update store stats
         store.total_received = store.total_received + amount;
@@ -150,29 +157,49 @@ module xstore::payment {
             vector::push_back(&mut registry.payments, payment_record);
         };
 
-        // Emit payment event
+        // Emit payment event with coin type info
         event::emit(PaymentEvent {
             payment_id,
             payer: payer_addr,
             store: store_address,
             amount,
+            coin_type: std::string::utf8(b"generic"), // Coin type tracked via type parameter
             timestamp: timestamp::now_seconds(),
         });
     }
 
-    /// Simple transfer (without store registration)
-    /// For direct peer-to-peer payments
-    public entry fun transfer(
+    /// Pay with native MOVE coin (convenience function)
+    public entry fun pay_with_move(
+        payer: &signer,
+        payment_id: String,
+        store_address: address,
+        amount: u64,
+    ) acquires Store, PaymentRegistry {
+        pay<AptosCoin>(payer, payment_id, store_address, amount);
+    }
+
+    /// Generic transfer (without store registration)
+    /// For direct peer-to-peer payments with any coin type
+    public entry fun transfer<CoinType>(
         sender: &signer,
         recipient: address,
         amount: u64,
     ) {
         assert!(amount > 0, E_INVALID_AMOUNT);
-        coin::transfer<AptosCoin>(sender, recipient, amount);
+        coin::transfer<CoinType>(sender, recipient, amount);
     }
 
-    /// Process refund from store to customer
-    public entry fun refund(
+    /// Transfer native MOVE (convenience function)
+    public entry fun transfer_move(
+        sender: &signer,
+        recipient: address,
+        amount: u64,
+    ) {
+        transfer<AptosCoin>(sender, recipient, amount);
+    }
+
+    /// Generic refund function
+    public entry fun refund<CoinType>(
         store_owner: &signer,
         payment_id: String,
         recipient: address,
@@ -187,7 +214,7 @@ module xstore::payment {
 
         // Process refund
         assert!(amount > 0, E_INVALID_AMOUNT);
-        coin::transfer<AptosCoin>(store_owner, recipient, amount);
+        coin::transfer<CoinType>(store_owner, recipient, amount);
 
         // Emit refund event
         event::emit(RefundEvent {
@@ -195,8 +222,19 @@ module xstore::payment {
             store: store_addr,
             recipient,
             amount,
+            coin_type: std::string::utf8(b"generic"),
             timestamp: timestamp::now_seconds(),
         });
+    }
+
+    /// Refund with native MOVE (convenience function)
+    public entry fun refund_move(
+        store_owner: &signer,
+        payment_id: String,
+        recipient: address,
+        amount: u64,
+    ) acquires Store {
+        refund<AptosCoin>(store_owner, payment_id, recipient, amount);
     }
 
     /// Update store wallet address
@@ -300,14 +338,56 @@ module xstore::payment {
         register_store(store_owner, string::utf8(b"Test Store"), store_addr);
         initialize_registry(store_owner);
 
-        // Make payment
-        pay(customer, string::utf8(b"payment_001"), store_addr, 100000000); // 1 MOVE
+        // Make payment using generic function
+        pay<AptosCoin>(customer, string::utf8(b"payment_001"), store_addr, 100000000); // 1 MOVE
 
         // Verify
         let (_, _, total_received, payment_count, is_active) = get_store_info(store_addr);
         assert!(total_received == 100000000, 1);
         assert!(payment_count == 1, 2);
         assert!(is_active == true, 3);
+
+        // Cleanup
+        coin::destroy_burn_cap(burn_cap);
+        coin::destroy_mint_cap(mint_cap);
+    }
+
+    #[test(aptos_framework = @0x1, store_owner = @0x123, customer = @0x456)]
+    public fun test_payment_with_move_convenience(
+        aptos_framework: &signer,
+        store_owner: &signer,
+        customer: &signer,
+    ) acquires Store, PaymentRegistry {
+        // Setup
+        timestamp::set_time_has_started_for_testing(aptos_framework);
+
+        let store_addr = signer::address_of(store_owner);
+        let customer_addr = signer::address_of(customer);
+
+        // Create accounts
+        account::create_account_for_test(store_addr);
+        account::create_account_for_test(customer_addr);
+
+        // Initialize AptosCoin and fund accounts
+        let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(aptos_framework);
+        coin::register<AptosCoin>(store_owner);
+        coin::register<AptosCoin>(customer);
+
+        // Mint coins to customer
+        let coins = coin::mint<AptosCoin>(1000000000, &mint_cap);
+        coin::deposit(customer_addr, coins);
+
+        // Register store
+        register_store(store_owner, string::utf8(b"Test Store"), store_addr);
+        initialize_registry(store_owner);
+
+        // Make payment using convenience function
+        pay_with_move(customer, string::utf8(b"payment_002"), store_addr, 50000000); // 0.5 MOVE
+
+        // Verify
+        let (_, _, total_received, payment_count, _) = get_store_info(store_addr);
+        assert!(total_received == 50000000, 1);
+        assert!(payment_count == 1, 2);
 
         // Cleanup
         coin::destroy_burn_cap(burn_cap);
