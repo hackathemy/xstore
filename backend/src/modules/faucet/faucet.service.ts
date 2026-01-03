@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import {
   Aptos,
   AptosConfig,
@@ -11,8 +10,9 @@ import {
 
 // TUSDC coin type - deployed to Movement testnet
 const TUSDC_COIN_TYPE = process.env.TESTNET_USDC_COIN_TYPE ||
-  '0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce::test_usdc::TUSDC';
+  '0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce::tusdc::TUSDC';
 const TUSDC_MODULE_ADDRESS = '0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce';
+const TUSDC_MODULE_NAME = 'tusdc';
 const MOVEMENT_NODE_URL = process.env.MOVEMENT_NODE_URL || 'https://testnet.movementnetwork.xyz/v1';
 
 // Faucet configuration
@@ -32,7 +32,7 @@ export class FaucetService {
   private aptos: Aptos;
   private signerAccount: Account | null = null;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor() {
     // Initialize Aptos SDK with Movement Network configuration
     const aptosConfig = new AptosConfig({
       network: Network.CUSTOM,
@@ -57,7 +57,7 @@ export class FaucetService {
 
   /**
    * Request TUSDC tokens from faucet
-   * Uses Aptos SDK to mint TUSDC to recipient
+   * Uses Aptos SDK to mint TUSDC to recipient with auto-registration
    */
   async requestTokens(recipientAddress: string): Promise<FaucetResult> {
     try {
@@ -84,41 +84,92 @@ export class FaucetService {
 
       this.logger.log(`🚰 Faucet request: ${FAUCET_AMOUNT_TUSDC} TUSDC to ${formattedAddress}`);
 
-      // Build the transaction
-      const transaction = await this.aptos.transaction.build.simple({
-        sender: this.signerAccount.accountAddress,
-        data: {
-          function: `${TUSDC_MODULE_ADDRESS}::test_usdc::mint`,
-          functionArguments: [formattedAddress, FAUCET_AMOUNT_SMALLEST],
-        } as InputEntryFunctionData,
-      });
+      // Try to call mint_to which should auto-register if available
+      // If that fails, try the standard mint function
+      try {
+        // First attempt: Use mint_to (auto-registers recipient)
+        const transaction = await this.aptos.transaction.build.simple({
+          sender: this.signerAccount.accountAddress,
+          data: {
+            function: `${TUSDC_MODULE_ADDRESS}::${TUSDC_MODULE_NAME}::mint_to`,
+            functionArguments: [formattedAddress, FAUCET_AMOUNT_SMALLEST],
+          } as InputEntryFunctionData,
+        });
 
-      // Sign and submit the transaction
-      const pendingTx = await this.aptos.signAndSubmitTransaction({
-        signer: this.signerAccount,
-        transaction,
-      });
+        const pendingTx = await this.aptos.signAndSubmitTransaction({
+          signer: this.signerAccount,
+          transaction,
+        });
 
-      // Wait for transaction confirmation
-      const committedTx = await this.aptos.waitForTransaction({
-        transactionHash: pendingTx.hash,
-      });
+        const committedTx = await this.aptos.waitForTransaction({
+          transactionHash: pendingTx.hash,
+        });
 
-      if (committedTx.success) {
-        this.logger.log(`✅ Faucet mint successful: ${pendingTx.hash}`);
-        return {
-          success: true,
-          txHash: pendingTx.hash,
-          amount: `${FAUCET_AMOUNT_TUSDC} TUSDC`,
-        };
-      } else {
-        throw new Error(`Transaction failed: ${committedTx.vm_status || 'Unknown error'}`);
+        if (committedTx.success) {
+          this.logger.log(`✅ Faucet mint_to successful: ${pendingTx.hash}`);
+          return {
+            success: true,
+            txHash: pendingTx.hash,
+            amount: `${FAUCET_AMOUNT_TUSDC} TUSDC`,
+          };
+        } else {
+          throw new Error(`Transaction failed: ${(committedTx as any).vm_status || 'Unknown error'}`);
+        }
+      } catch (mintToError) {
+        // mint_to not available, try standard mint
+        this.logger.debug(`mint_to failed, trying standard mint: ${mintToError}`);
+
+        const transaction = await this.aptos.transaction.build.simple({
+          sender: this.signerAccount.accountAddress,
+          data: {
+            function: `${TUSDC_MODULE_ADDRESS}::${TUSDC_MODULE_NAME}::mint`,
+            functionArguments: [formattedAddress, FAUCET_AMOUNT_SMALLEST],
+          } as InputEntryFunctionData,
+        });
+
+        const pendingTx = await this.aptos.signAndSubmitTransaction({
+          signer: this.signerAccount,
+          transaction,
+        });
+
+        const committedTx = await this.aptos.waitForTransaction({
+          transactionHash: pendingTx.hash,
+        });
+
+        if (committedTx.success) {
+          this.logger.log(`✅ Faucet mint successful: ${pendingTx.hash}`);
+          return {
+            success: true,
+            txHash: pendingTx.hash,
+            amount: `${FAUCET_AMOUNT_TUSDC} TUSDC`,
+          };
+        } else {
+          // Check if the error is about CoinStore not registered
+          const vmStatus = (committedTx as any).vm_status || '';
+          if (vmStatus.includes('ECOIN_STORE_NOT_PUBLISHED')) {
+            return {
+              success: false,
+              error: 'Account not registered for TUSDC. Please register your account first by calling the register endpoint.',
+            };
+          }
+          throw new Error(`Transaction failed: ${vmStatus || 'Unknown error'}`);
+        }
       }
     } catch (error) {
       this.logger.error(`❌ Faucet mint failed: ${error}`);
+      const errorMessage = error instanceof Error ? error.message : 'Faucet request failed';
+
+      // Provide helpful error message for CoinStore registration
+      if (errorMessage.includes('ECOIN_STORE_NOT_PUBLISHED')) {
+        return {
+          success: false,
+          error: 'Account not registered for TUSDC. The recipient account needs to register for the TUSDC coin type first.',
+        };
+      }
+
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Faucet request failed',
+        error: errorMessage,
       };
     }
   }
@@ -150,14 +201,13 @@ export class FaucetService {
       // Use view function to get balance
       const [balance] = await this.aptos.view({
         payload: {
-          function: `${TUSDC_MODULE_ADDRESS}::test_usdc::balance`,
+          function: `${TUSDC_MODULE_ADDRESS}::${TUSDC_MODULE_NAME}::balance`,
           functionArguments: [formattedAddress],
         },
       });
 
       if (balance !== undefined) {
-        const formatted = (Number(balance) / 1_000_000).toFixed(6);
-        return formatted;
+        return (Number(balance) / 1_000_000).toFixed(6);
       }
 
       return '0';

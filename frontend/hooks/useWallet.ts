@@ -75,6 +75,33 @@ export function useWallet() {
     }
   }, [address, testWallet, privyWallet]);
 
+  // Get stablecoin (TUSDC) balance
+  const getStablecoinBalance = useCallback(async () => {
+    if (!address) return null;
+
+    try {
+      // For Privy wallet - use getStablecoinBalance from context
+      if (privyWallet) {
+        const balance = await privyWallet.getStablecoinBalance();
+        return {
+          formatted: balance,
+          decimals: 6,
+          symbol: 'TUSDC',
+        };
+      }
+
+      // Test wallet doesn't support stablecoin yet
+      return {
+        formatted: '0',
+        decimals: 6,
+        symbol: 'TUSDC',
+      };
+    } catch (error) {
+      console.error("Error fetching stablecoin balance:", error);
+      return null;
+    }
+  }, [address, privyWallet]);
+
   const sendMOVE = useCallback(
     async (to: string, amount: number) => {
       // Use test wallet for sending
@@ -184,6 +211,7 @@ export function useWallet() {
     isConnected,
     address,
     getBalance,
+    getStablecoinBalance,
     sendMOVE,
     signAndSubmitTransaction,
     signMessage,

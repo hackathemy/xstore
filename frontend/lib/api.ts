@@ -220,6 +220,31 @@ class ApiClient {
     }>('/x402/sponsorship-status');
   }
 
+  // Sponsored Registration (gas paid by facilitator)
+  async buildSponsoredRegistration(data: { senderAddress: string; coinType?: string }) {
+    return this.request<{
+      transactionBytes: string;
+      feePayerAddress: string;
+      coinType: string;
+      coinSymbol: string;
+      message: string;
+    }>('/x402/build-sponsored-registration', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async submitSponsoredRegistration(data: { transactionBytes: string; senderAuthenticatorBytes: string; coinType?: string }) {
+    return this.request<{
+      success: boolean;
+      txHash?: string;
+      error?: string;
+    }>('/x402/submit-sponsored-registration', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   // Faucet
   async getFaucetInfo() {
     return this.request<{

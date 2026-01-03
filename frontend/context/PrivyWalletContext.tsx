@@ -2,6 +2,7 @@
 
 import { createContext, useContext, ReactNode, useState, useEffect, useCallback } from "react";
 import { usePrivy } from "@privy-io/react-auth";
+
 import {
   Aptos,
   AptosConfig,
@@ -45,6 +46,8 @@ interface PrivyWalletContextType {
   getClient: () => Aptos | null;
   getAccount: () => Account | null;
   exportPrivateKey: () => string | null;
+  registerForTusdc: () => Promise<{ success: boolean; txHash?: string; error?: string }>;
+  isRegisteredForTusdc: () => Promise<boolean>;
 }
 
 const PrivyWalletContext = createContext<PrivyWalletContextType | null>(null);
@@ -339,6 +342,99 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
     return (account as any).privateKey?.toString() || null;
   }, [account]);
 
+  /**
+   * Check if the account is registered for TUSDC
+   */
+  const isRegisteredForTusdc = useCallback(async (): Promise<boolean> => {
+    if (!walletAddress || !client) return false;
+
+    try {
+      const resources = await client.getAccountResources({
+        accountAddress: AccountAddress.from(walletAddress),
+      });
+
+      const coinStore = resources.find(
+        (r) => r.type === `0x1::coin::CoinStore<${stablecoin.coinType}>`
+      );
+
+      return !!coinStore;
+    } catch (error) {
+      console.error("Error checking TUSDC registration:", error);
+      return false;
+    }
+  }, [walletAddress, client, stablecoin.coinType]);
+
+  /**
+   * Register the account for TUSDC coin type using gas sponsorship
+   * In Move VM, accounts must explicitly register for a coin type before receiving tokens
+   * Uses Facilitator to pay gas fees so new users don't need MOVE tokens
+   */
+  const registerForTusdc = useCallback(async (): Promise<{ success: boolean; txHash?: string; error?: string }> => {
+    if (!account) {
+      return { success: false, error: "Wallet not connected" };
+    }
+    if (!client) {
+      return { success: false, error: "Client not initialized" };
+    }
+    if (!walletAddress) {
+      return { success: false, error: "Wallet address not available" };
+    }
+
+    try {
+      // Check if already registered
+      const alreadyRegistered = await isRegisteredForTusdc();
+      if (alreadyRegistered) {
+        console.log("✅ Already registered for TUSDC");
+        return { success: true };
+      }
+
+      console.log("📝 Registering for TUSDC coin type (gas sponsored)...");
+
+      // Step 1: Build sponsored registration transaction via backend
+      console.log("🔧 Building sponsored registration transaction...");
+      const sponsoredTx = await api.buildSponsoredRegistration({
+        senderAddress: walletAddress,
+        coinType: stablecoin.coinType,
+      });
+
+      console.log("💰 Registration sponsored by:", sponsoredTx.feePayerAddress);
+
+      // Step 2: Deserialize and sign the transaction as sender only
+      console.log("✍️ Signing transaction (sender only, gas paid by Facilitator)...");
+      const txBytes = new Uint8Array(Buffer.from(sponsoredTx.transactionBytes, 'hex'));
+      const transaction = SimpleTransaction.deserialize(new Deserializer(txBytes));
+
+      const senderAuthenticator = client.transaction.sign({
+        signer: account,
+        transaction,
+      });
+
+      // Serialize the authenticator
+      const senderAuthenticatorBytes = Buffer.from(senderAuthenticator.bcsToBytes()).toString('hex');
+
+      // Step 3: Submit to backend - Facilitator co-signs as fee payer and broadcasts
+      console.log("📤 Submitting to Facilitator for gas sponsorship...");
+      const result = await api.submitSponsoredRegistration({
+        transactionBytes: sponsoredTx.transactionBytes,
+        senderAuthenticatorBytes,
+        coinType: stablecoin.coinType,
+      });
+
+      if (result.success && result.txHash) {
+        console.log("✅ TUSDC registration successful:", result.txHash);
+        return { success: true, txHash: result.txHash };
+      } else {
+        return { success: false, error: result.error || "Registration failed" };
+      }
+    } catch (error) {
+      console.error("TUSDC registration failed:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Registration failed",
+      };
+    }
+  }, [account, client, walletAddress, stablecoin.coinType, isRegisteredForTusdc]);
+
   return (
     <PrivyWalletContext.Provider
       value={{
@@ -355,6 +451,8 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
         getClient,
         getAccount,
         exportPrivateKey,
+        registerForTusdc,
+        isRegisteredForTusdc,
       }}
     >
       {children}

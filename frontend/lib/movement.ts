@@ -130,21 +130,22 @@ export const MAINNET_STABLECOINS: Record<string, StablecoinConfig> = {
   },
 };
 
-// Movement Testnet Stablecoins (may differ from mainnet)
+// Movement Testnet Stablecoins (TUSDC)
+// TUSDC deployed at: 0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce
 export const TESTNET_STABLECOINS: Record<string, StablecoinConfig> = {
   USDC: {
-    symbol: 'USDC',
-    name: 'USD Coin (Test)',
-    // Test USDC on Bardock Testnet - configure via env
+    symbol: 'TUSDC',
+    name: 'Test USD Coin',
+    // TUSDC on Movement Testnet
     coinType: process.env.NEXT_PUBLIC_TESTNET_USDC_COIN_TYPE ||
-      '0x1::aptos_coin::AptosCoin', // Fallback to native MOVE for testing
+      '0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce::tusdc::TUSDC',
     decimals: 6,
   },
   USDT: {
-    symbol: 'USDT',
-    name: 'Tether USD (Test)',
+    symbol: 'TUSDT',
+    name: 'Test Tether USD',
     coinType: process.env.NEXT_PUBLIC_TESTNET_USDT_COIN_TYPE ||
-      '0x1::aptos_coin::AptosCoin', // Fallback to native MOVE for testing
+      '0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce::tusdc::TUSDC', // Use same TUSDC for now
     decimals: 6,
   },
 };

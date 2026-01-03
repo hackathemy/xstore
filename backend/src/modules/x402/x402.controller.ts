@@ -8,6 +8,7 @@ import {
   HttpStatus,
   BadRequestException,
   UseFilters,
+  Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiHeader, ApiResponse } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsIn } from 'class-validator';
@@ -61,6 +62,30 @@ class SubmitSponsoredPaymentDto {
   @IsString()
   @IsNotEmpty()
   senderAuthenticatorBytes: string;
+}
+
+class BuildSponsoredRegistrationDto {
+  @IsString()
+  @IsNotEmpty()
+  senderAddress: string;
+
+  @IsOptional()
+  @IsString()
+  coinType?: string;
+}
+
+class SubmitSponsoredRegistrationDto {
+  @IsString()
+  @IsNotEmpty()
+  transactionBytes: string;
+
+  @IsString()
+  @IsNotEmpty()
+  senderAuthenticatorBytes: string;
+
+  @IsOptional()
+  @IsString()
+  coinType?: string;
 }
 
 @ApiTags('X402 Payment Protocol')
@@ -455,5 +480,101 @@ export class X402Controller {
   @ApiOperation({ summary: 'Check if gas sponsorship is available' })
   async getSponsorshipStatus() {
     return this.facilitatorService.isGasSponsorshipAvailable();
+  }
+
+  // ==========================================
+  // Sponsored Registration Endpoints
+  // For registering coin types with gas sponsorship
+  // ==========================================
+
+  /**
+   * Build a sponsored registration transaction
+   * Allows new users to register for TUSDC without needing MOVE tokens for gas
+   */
+  @Post('build-sponsored-registration')
+  @ApiOperation({ summary: 'Build sponsored registration transaction (gas paid by facilitator)' })
+  async buildSponsoredRegistration(
+    @Body() dto: BuildSponsoredRegistrationDto,
+  ) {
+    // Check if sponsorship is available
+    const sponsorshipInfo = await this.facilitatorService.isGasSponsorshipAvailable();
+    if (!sponsorshipInfo.available) {
+      throw new BadRequestException('Gas sponsorship is not available');
+    }
+
+    // Use default stablecoin if not specified
+    const stablecoin = this.facilitatorService.getPaymentStablecoin();
+    const coinType = dto.coinType || stablecoin.coinType;
+
+    // Build sponsored registration transaction
+    const txData = await this.facilitatorService.buildSponsoredRegistration({
+      senderAddress: dto.senderAddress,
+      coinType,
+    });
+
+    return {
+      transactionBytes: txData.transactionBytes,
+      feePayerAddress: txData.feePayerAddress,
+      coinType,
+      coinSymbol: stablecoin.symbol,
+      message: 'Sign this transaction as sender. Gas will be paid by facilitator.',
+    };
+  }
+
+  /**
+   * Submit a sponsored registration transaction
+   * Client sends signed transaction, facilitator co-signs as fee payer and submits
+   */
+  @Post('submit-sponsored-registration')
+  @ApiOperation({ summary: 'Submit sponsored registration transaction (gas paid by facilitator)' })
+  async submitSponsoredRegistration(
+    @Body() dto: SubmitSponsoredRegistrationDto,
+  ) {
+    // Use default stablecoin if not specified
+    const stablecoin = this.facilitatorService.getPaymentStablecoin();
+    const coinType = dto.coinType || stablecoin.coinType;
+
+    // Submit sponsored registration transaction
+    const result = await this.facilitatorService.submitSponsoredRegistration({
+      transactionBytes: dto.transactionBytes,
+      senderAuthenticatorBytes: dto.senderAuthenticatorBytes,
+      coinType,
+    });
+
+    return result;
+  }
+
+  // ==========================================
+  // Registration Check Endpoints
+  // ==========================================
+
+  /**
+   * Check if an address is registered for a coin type
+   * Store owners must be registered for TUSDC before receiving payments
+   */
+  @Get('check-registration')
+  @ApiOperation({ summary: 'Check if an address is registered for a coin type' })
+  async checkRegistration(
+    @Query('address') address: string,
+    @Query('coinType') coinType?: string,
+  ) {
+    if (!address) {
+      throw new BadRequestException('Address is required');
+    }
+
+    const stablecoin = this.facilitatorService.getPaymentStablecoin();
+    const targetCoinType = coinType || stablecoin.coinType;
+
+    const isRegistered = await this.facilitatorService.isRegisteredForCoin(address, targetCoinType);
+
+    return {
+      address,
+      coinType: targetCoinType,
+      coinSymbol: stablecoin.symbol,
+      isRegistered,
+      message: isRegistered
+        ? 'Address is registered and can receive payments'
+        : 'Address is NOT registered. Must call register<CoinType> before receiving payments.',
+    };
   }
 }

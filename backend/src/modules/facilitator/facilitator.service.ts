@@ -111,17 +111,20 @@ const MAINNET_STABLECOINS: Record<string, StablecoinConfig> = {
 };
 
 // Testnet stablecoins
+// TUSDC deployed at: 0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce
 const TESTNET_STABLECOINS: Record<string, StablecoinConfig> = {
   USDC: {
-    symbol: 'USDC',
-    name: 'USD Coin (Test)',
-    coinType: process.env.TESTNET_USDC_COIN_TYPE || MOVE_COIN_TYPE,
+    symbol: 'TUSDC',
+    name: 'Test USD Coin',
+    coinType: process.env.TESTNET_USDC_COIN_TYPE ||
+      '0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce::tusdc::TUSDC',
     decimals: STABLECOIN_DECIMALS,
   },
   USDT: {
-    symbol: 'USDT',
-    name: 'Tether USD (Test)',
-    coinType: process.env.TESTNET_USDT_COIN_TYPE || MOVE_COIN_TYPE,
+    symbol: 'TUSDT',
+    name: 'Test Tether USD',
+    coinType: process.env.TESTNET_USDT_COIN_TYPE ||
+      '0x60a2f32cde9ddf5b3e73e207f124642390ef839d8b76d05d009235b0dc4b20ce::tusdc::TUSDC',
     decimals: STABLECOIN_DECIMALS,
   },
 };
@@ -378,6 +381,74 @@ export class FacilitatorService {
     const stablecoins = this.getStablecoins();
     const stablecoin = stablecoins[symbol];
     return this.getTokenBalance(address, stablecoin?.coinType);
+  }
+
+  /**
+   * Check if an address is registered for a specific coin type
+   */
+  async isRegisteredForCoin(address: string, coinType: string): Promise<boolean> {
+    try {
+      const validAddress = validateMoveAddress(address);
+      const resources = await this.client.getAccountResources({
+        accountAddress: AccountAddress.from(validAddress),
+      });
+
+      const coinStore = resources.find(
+        (r) => r.type === `0x1::coin::CoinStore<${coinType}>`,
+      );
+
+      return !!coinStore;
+    } catch (error) {
+      this.logger.debug(`Could not check registration for ${address}: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * Register an address for a coin type (Facilitator pays gas)
+   * Used to auto-register recipients before payment
+   */
+  async registerAddressForCoin(address: string, coinType: string): Promise<{ success: boolean; txHash?: string; error?: string }> {
+    if (!this.facilitatorAccount) {
+      return { success: false, error: 'Facilitator account not configured' };
+    }
+
+    try {
+      const validAddress = validateMoveAddress(address);
+
+      // Check if already registered
+      const isRegistered = await this.isRegisteredForCoin(validAddress, coinType);
+      if (isRegistered) {
+        this.logger.debug(`Address ${validAddress} already registered for ${coinType}`);
+        return { success: true };
+      }
+
+      this.logger.log(`🔧 Auto-registering ${validAddress} for ${coinType}...`);
+
+      // Build register transaction - Facilitator executes on behalf of the address
+      // Note: This requires the address to sign, so we use a different approach
+      // We'll use the managed_coin::register function which the recipient must call
+      // Instead, for recipients, we can use aptos_account::transfer which auto-registers
+
+      // Actually, 0x1::coin::transfer requires recipient to be registered
+      // But 0x1::aptos_account::transfer_coins auto-creates the account
+      // Let's check if this coin type supports auto-registration
+
+      // For now, we'll try to register using a simple transfer of 0 amount
+      // This won't work - let's just log and return an error asking for manual registration
+
+      this.logger.warn(`⚠️ Address ${validAddress} needs to register for ${coinType} manually`);
+      return {
+        success: false,
+        error: `Recipient ${validAddress} is not registered for ${coinType}. The store owner needs to register for TUSDC first.`
+      };
+    } catch (error) {
+      this.logger.error(`Failed to register ${address} for ${coinType}: ${error}`);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Registration failed',
+      };
+    }
   }
 
   /**
@@ -769,6 +840,31 @@ export class FacilitatorService {
 
     this.logger.debug(`Validated Move addresses: recipient=${validRecipient}, sender=${validSender}`);
 
+    // Check if both sender and recipient are registered for the coin type
+    // In Move VM, 0x1::coin::transfer requires both parties to have CoinStore registered
+    if (isStablecoin) {
+      const [senderRegistered, recipientRegistered] = await Promise.all([
+        this.isRegisteredForCoin(validSender, coinType),
+        this.isRegisteredForCoin(validRecipient, coinType),
+      ]);
+
+      if (!senderRegistered) {
+        throw new Error(
+          `Sender ${validSender} is not registered for ${coinType}. ` +
+          `Please register for the coin type first using the /api/x402/build-sponsored-registration endpoint.`
+        );
+      }
+
+      if (!recipientRegistered) {
+        throw new Error(
+          `Recipient (Store owner) ${validRecipient} is not registered for ${coinType}. ` +
+          `The store owner needs to register for TUSDC first before they can receive payments.`
+        );
+      }
+
+      this.logger.debug(`Both sender and recipient are registered for ${coinType}`);
+    }
+
     let payload: InputGenerateTransactionPayloadData;
     if (isStablecoin) {
       payload = {
@@ -863,6 +959,107 @@ export class FacilitatorService {
    */
   getAptosClient(): Aptos {
     return this.client;
+  }
+
+  /**
+   * Build a sponsored registration transaction for TUSDC coin type
+   * Facilitator pays gas fees so new users can register without MOVE tokens
+   */
+  async buildSponsoredRegistration(params: {
+    senderAddress: string;
+    coinType: string;
+  }): Promise<{ transactionBytes: string; feePayerAddress: string }> {
+    if (!this.facilitatorAccount) {
+      throw new Error('Facilitator account not configured - cannot sponsor gas');
+    }
+
+    const { senderAddress, coinType } = params;
+
+    // Validate Move address
+    const validSender = validateMoveAddress(senderAddress);
+
+    this.logger.debug(`Building sponsored registration for ${coinType} to ${validSender}`);
+
+    // Build register transaction payload
+    const payload: InputGenerateTransactionPayloadData = {
+      function: '0x1::managed_coin::register',
+      typeArguments: [coinType],
+      functionArguments: [],
+    };
+
+    // Build transaction with fee payer
+    const transaction = await this.client.transaction.build.simple({
+      sender: AccountAddress.from(validSender),
+      data: payload,
+      withFeePayer: true,
+    });
+
+    // Serialize transaction for client
+    const transactionBytes = Buffer.from(transaction.bcsToBytes()).toString('hex');
+
+    return {
+      transactionBytes,
+      feePayerAddress: this.facilitatorAccount.accountAddress.toString(),
+    };
+  }
+
+  /**
+   * Submit a sponsored registration transaction
+   * Client has signed as sender, Facilitator signs as fee payer
+   */
+  async submitSponsoredRegistration(params: {
+    transactionBytes: string;
+    senderAuthenticatorBytes: string;
+    coinType: string;
+  }): Promise<{ success: boolean; txHash?: string; error?: string }> {
+    if (!this.facilitatorAccount) {
+      return { success: false, error: 'Facilitator account not configured' };
+    }
+
+    try {
+      const { transactionBytes, senderAuthenticatorBytes, coinType } = params;
+
+      // Deserialize transaction
+      const txBytes = Buffer.from(transactionBytes, 'hex');
+      const transaction = SimpleTransaction.deserialize(new Deserializer(txBytes));
+
+      // Deserialize sender authenticator
+      const authBytes = Buffer.from(senderAuthenticatorBytes, 'hex');
+      const senderAuthenticator = AccountAuthenticator.deserialize(new Deserializer(authBytes));
+
+      // Sign as fee payer
+      const feePayerAuthenticator = this.client.transaction.signAsFeePayer({
+        signer: this.facilitatorAccount,
+        transaction,
+      });
+
+      this.logger.log(`💰 Sponsoring gas for ${coinType} registration`);
+
+      // Submit transaction with both signatures
+      const pendingTx = await this.client.transaction.submit.simple({
+        transaction,
+        senderAuthenticator,
+        feePayerAuthenticator,
+      });
+
+      // Wait for confirmation
+      const txResult = await this.client.waitForTransaction({
+        transactionHash: pendingTx.hash,
+      });
+
+      this.logger.log(`✅ Sponsored registration confirmed: ${txResult.hash}`);
+
+      return {
+        success: true,
+        txHash: txResult.hash,
+      };
+    } catch (error) {
+      this.logger.error(`❌ Sponsored registration failed: ${error}`);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Registration submission failed',
+      };
+    }
   }
 
   /**

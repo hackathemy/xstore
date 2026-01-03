@@ -5,12 +5,14 @@ import { PageLayout } from "@/components/layout";
 import { EmptyState, EmptyStateIcons } from "@/components/ui/empty-state";
 import { LoadingSpinner } from "@/components/ui/loading-skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { PaymentSuccessModal } from "@/components/ui/payment-success-modal";
 import useTab from "@/hooks/useTab";
 import { usePayment } from "@/hooks/usePayment";
 import { usePrivy } from "@privy-io/react-auth";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { getActiveNetwork } from "@/lib/movement";
 import type { TabStatus } from "@/types/tab";
 
 export default function TabPage() {
@@ -24,6 +26,9 @@ export default function TabPage() {
 
   const [isClosing, setIsClosing] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<"idle" | "paying" | "confirming">("idle");
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successTxHash, setSuccessTxHash] = useState<string>("");
+  const network = getActiveNetwork();
 
   const handleCloseTab = async () => {
     if (!tab || !isConnected) return;
@@ -43,7 +48,12 @@ export default function TabPage() {
 
       // Payment successful - refresh tab data
       queryClient.invalidateQueries({ queryKey: [`tab_${tabId}`] });
-      alert(`Payment successful!\nTX: ${result.txHash?.slice(0, 10)}...`);
+
+      // Show success modal instead of alert
+      if (result.txHash) {
+        setSuccessTxHash(result.txHash);
+        setShowSuccessModal(true);
+      }
     } catch (error) {
       console.error("Error closing tab:", error);
       alert(error instanceof Error ? error.message : "Failed to close tab. Please try again.");
@@ -142,16 +152,40 @@ export default function TabPage() {
 
       {/* Payment Info */}
       {tab.status === "PAID" && tab.paymentTxHash && (
-        <div className="w-full card-elevated p-5 mb-6 border-emerald-500/20 animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
-          <div className="flex items-center gap-2 mb-3">
-            <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="text-emerald-400 font-medium">Payment Completed</p>
+        <div className="w-full card-elevated p-5 mb-6 border-emerald-500/30 animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
+          {/* Success Header */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
+              <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-emerald-400 font-semibold">Payment Completed</p>
+              <p className="text-xs text-gray-500">Transaction confirmed on Movement {network.isTestnet ? 'Testnet' : 'Mainnet'}</p>
+            </div>
           </div>
-          <p className="text-sm text-violet-400 flex items-center gap-1">
-            TX: {tab.paymentTxHash.slice(0, 20)}...
-          </p>
+
+          {/* Transaction Hash */}
+          <div className="bg-white/5 rounded-lg p-3 mb-4">
+            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Transaction Hash</p>
+            <code className="text-sm text-violet-400 font-mono break-all">
+              {tab.paymentTxHash}
+            </code>
+          </div>
+
+          {/* Explorer Link */}
+          <a
+            href={`https://explorer.movementlabs.xyz/txn/${tab.paymentTxHash}?network=${network.isTestnet ? 'testnet' : 'mainnet'}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center gap-2 w-full h-10 rounded-lg bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/30 text-violet-400 font-medium transition-all"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+            View on Movement Explorer
+          </a>
         </div>
       )}
 
@@ -208,6 +242,15 @@ export default function TabPage() {
           </Button>
         )}
       </div>
+
+      {/* Payment Success Modal */}
+      <PaymentSuccessModal
+        isOpen={showSuccessModal}
+        onClose={() => setShowSuccessModal(false)}
+        txHash={successTxHash}
+        amount={tab?.totalAmount || "0"}
+        storeName={tab?.store?.name}
+      />
     </PageLayout>
   );
 }

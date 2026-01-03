@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { PageLayout } from "@/components/layout";
 import { EmptyState, EmptyStateIcons } from "@/components/ui/empty-state";
+import { PaymentSuccessModal } from "@/components/ui/payment-success-modal";
 import {
   Select,
   SelectContent,
@@ -25,21 +26,23 @@ export default function StorePage() {
   const params = useParams();
   const router = useRouter();
   const { id } = params as { id: string };
-  const { address, isConnected, getBalance, sendMOVE } = useWallet();
+  const { address, isConnected, getBalance, getStablecoinBalance, sendMOVE } = useWallet();
   const { payTab } = usePayment();
   const { data: store } = useStore(id);
   const [count, setCount] = useState("1");
   const [tip, setTip] = useState("10");
   const [balance, setBalance] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successTxHash, setSuccessTxHash] = useState<string>("");
 
   useEffect(() => {
     if (isConnected) {
-      getBalance().then((bal) => {
+      getStablecoinBalance().then((bal) => {
         if (bal) setBalance(bal.formatted);
       });
     }
-  }, [isConnected, getBalance]);
+  }, [isConnected, getStablecoinBalance]);
 
   const totalPrice = useMemo(() => {
     if (!store) return 0;
@@ -101,7 +104,11 @@ export default function StorePage() {
         console.log("✅ Payment successful:", hash);
       }
 
-      alert("Order Success!");
+      // Show success modal instead of alert
+      if (hash) {
+        setSuccessTxHash(hash);
+        setShowSuccessModal(true);
+      }
     } catch (error) {
       console.error("Transaction failed:", error);
       alert("Transaction failed. Please try again.");
@@ -242,7 +249,7 @@ export default function StorePage() {
 
           {isConnected && balance && (
             <p className="text-sm text-gray-500 mb-4 text-center">
-              Your balance: {parseFloat(balance).toFixed(4)} USDC
+              Your balance: {parseFloat(balance).toFixed(4)} TUSDC
             </p>
           )}
 
@@ -308,6 +315,15 @@ export default function StorePage() {
           )}
         </div>
       </div>
+
+      {/* Payment Success Modal */}
+      <PaymentSuccessModal
+        isOpen={showSuccessModal}
+        onClose={() => setShowSuccessModal(false)}
+        txHash={successTxHash}
+        amount={totalPrice.toString()}
+        storeName={store?.name}
+      />
     </PageLayout>
   );
 }

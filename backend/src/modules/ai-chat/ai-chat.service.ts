@@ -256,7 +256,9 @@ Prices are in USDC (crypto stablecoin pegged to USD).`;
             functionDeclarations: this.getFunctionDeclarations(),
           },
         ],
-        systemInstruction: systemPrompt,
+        systemInstruction: {
+          parts: [{ text: systemPrompt }],
+        },
       });
 
       const result = await chat.sendMessage(message);
@@ -337,8 +339,10 @@ Prices are in USDC (crypto stablecoin pegged to USD).`;
       };
     } catch (error) {
       this.logger.error('Chat error:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error('Error details:', errorMessage);
       return {
-        message: 'Sorry, I encountered an error. Please try again.',
+        message: `Sorry, I encountered an error: ${errorMessage}`,
       };
     }
   }

@@ -19,7 +19,7 @@ interface FaucetInfo {
 
 export default function ChargePage() {
   const router = useRouter();
-  const { address, isConnected, getStablecoinBalance } = usePrivyWallet();
+  const { address, isConnected, getStablecoinBalance, registerForTusdc, isRegisteredForTusdc } = usePrivyWallet();
 
   const [faucetInfo, setFaucetInfo] = useState<FaucetInfo | null>(null);
   const [balance, setBalance] = useState<string>("0");
@@ -71,6 +71,29 @@ export default function ChargePage() {
     setResult(null);
 
     try {
+      // Step 1: Check if account is registered for TUSDC
+      const isRegistered = await isRegisteredForTusdc();
+
+      if (!isRegistered) {
+        // Step 2: Register for TUSDC first
+        setResult({ success: true, message: "Registering for TUSDC coin type..." });
+
+        const registerResult = await registerForTusdc();
+        if (!registerResult.success) {
+          setResult({
+            success: false,
+            message: registerResult.error || "Failed to register for TUSDC",
+          });
+          return;
+        }
+
+        console.log("✅ TUSDC registration complete:", registerResult.txHash);
+        // Wait a bit for the registration to be confirmed
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      // Step 3: Request tokens from faucet
+      setResult({ success: true, message: "Requesting tokens from faucet..." });
       const response = await api.requestFaucet(address);
 
       if (response.success) {
