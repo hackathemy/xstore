@@ -11,8 +11,10 @@ import {
 } from './types';
 import { getX402Client } from './client';
 
-// Movement Network configuration
-const MOVEMENT_TESTNET_URL = 'https://aptos.testnet.bardock.movementlabs.xyz/v1';
+// Movement Network configuration - use proxy URL to avoid CORS
+const MOVEMENT_TESTNET_URL = typeof window !== 'undefined'
+  ? '/movement-rpc'  // Browser: use Next.js proxy
+  : 'https://testnet.movementnetwork.xyz/v1';  // SSR: direct URL
 
 interface UseX402PaymentOptions {
   onSuccess?: (result: X402VerificationResult) => void;

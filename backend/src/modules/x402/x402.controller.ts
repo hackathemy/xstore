@@ -10,6 +10,7 @@ import {
   UseFilters,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiHeader, ApiResponse } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, IsIn } from 'class-validator';
 import { FacilitatorService } from '../facilitator/facilitator.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -25,19 +26,40 @@ import {
 
 // DTOs
 class CreateX402PaymentDto {
+  @IsString()
+  @IsNotEmpty()
   tabId: string;
+
+  @IsString()
+  @IsNotEmpty()
   payerAddress: string;
+
+  @IsOptional()
+  @IsIn(['USDC', 'USDT'])
   currency?: 'USDC' | 'USDT';
 }
 
 class VerifyX402PaymentDto {
+  @IsString()
+  @IsNotEmpty()
   paymentId: string;
+
+  @IsString()
+  @IsNotEmpty()
   txHash: string;
 }
 
 class SubmitSponsoredPaymentDto {
+  @IsString()
+  @IsNotEmpty()
   paymentId: string;
+
+  @IsString()
+  @IsNotEmpty()
   transactionBytes: string;
+
+  @IsString()
+  @IsNotEmpty()
   senderAuthenticatorBytes: string;
 }
 

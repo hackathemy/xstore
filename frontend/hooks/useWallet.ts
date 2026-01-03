@@ -1,10 +1,8 @@
 "use client";
 
 import { usePrivy } from "@privy-io/react-auth";
-import { useCallback, useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo } from "react";
 import {
-  Aptos,
-  AptosConfig,
   AccountAddress,
   InputGenerateTransactionPayloadData,
 } from "@aptos-labs/ts-sdk";
@@ -14,30 +12,30 @@ import {
   formatMoveAmount,
   parseMoveAmount,
   MOVE_COIN_TYPE,
-  shortenMoveAddress,
 } from "@/lib/movement";
 import { USE_TEST_WALLET } from "@/context";
 import { useTestWallet } from "@/context/TestWalletContext";
+import { usePrivyWallet } from "@/context/PrivyWalletContext";
 
 // Movement Network (Move Native)
 const activeNetwork = getActiveNetwork();
 
 export function useWallet() {
-  const { ready, authenticated, user } = usePrivy();
+  const { ready, authenticated } = usePrivy();
   const testWallet = USE_TEST_WALLET ? useTestWallet() : null;
+  const privyWallet = !USE_TEST_WALLET ? usePrivyWallet() : null;
 
   // Movement client
   const client = useMemo(() => createMovementClient(), []);
 
-  // Use test wallet address if enabled, otherwise use Privy wallet
-  // Note: Privy Movement addresses are different from EVM addresses
+  // Use test wallet address if enabled, otherwise use Privy wallet (now with local Ed25519 key)
   const address = USE_TEST_WALLET
     ? testWallet?.address
-    : user?.wallet?.address; // Privy will provide Movement address when configured
+    : privyWallet?.address;
 
   const isConnected = USE_TEST_WALLET
     ? (testWallet?.isConnected ?? false)
-    : (authenticated && !!user?.wallet?.address);
+    : (privyWallet?.isConnected ?? false);
 
   const getBalance = useCallback(async () => {
     if (!address) return null;
@@ -54,20 +52,12 @@ export function useWallet() {
         };
       }
 
-      // For Privy wallet - query Movement network
-      const resources = await client.getAccountResources({
-        accountAddress: AccountAddress.from(address),
-      });
-
-      const coinStore = resources.find(
-        (r) => r.type === `0x1::coin::CoinStore<${MOVE_COIN_TYPE}>`
-      );
-
-      if (coinStore) {
-        const balance = BigInt((coinStore.data as { coin: { value: string } }).coin.value);
+      // For Privy wallet - use PrivyWalletContext (with local Ed25519 key)
+      if (privyWallet) {
+        const balance = await privyWallet.getBalance();
         return {
-          value: balance,
-          formatted: formatMoveAmount(balance),
+          value: parseMoveAmount(parseFloat(balance)),
+          formatted: balance,
           decimals: 8,
           symbol: 'MOVE',
         };
@@ -83,7 +73,7 @@ export function useWallet() {
       console.error("Error fetching balance:", error);
       return null;
     }
-  }, [address, testWallet, client]);
+  }, [address, testWallet, privyWallet]);
 
   const sendMOVE = useCallback(
     async (to: string, amount: number) => {
@@ -103,9 +93,9 @@ export function useWallet() {
         }
       }
 
-      // For Privy wallet - need to implement Movement transaction signing
-      // This requires Privy's Movement integration
-      throw new Error("Privy Movement wallet integration not yet implemented. Use test wallet mode.");
+      // For Privy wallet with local Ed25519 key - direct transfers not supported
+      // Use X402 sponsorship via payTab
+      throw new Error("Direct transfers not supported. Use payTab with X402 gas sponsorship.");
     },
     [testWallet]
   );
@@ -117,10 +107,40 @@ export function useWallet() {
         return testWallet.signAndSubmitTransaction(payload);
       }
 
-      // For Privy wallet - need to implement
-      throw new Error("Privy Movement wallet integration not yet implemented. Use test wallet mode.");
+      // For Privy wallet - use local Ed25519 account if available
+      if (privyWallet) {
+        const account = privyWallet.getAccount();
+        if (!account) {
+          throw new Error("Account not initialized");
+        }
+
+        // Build and sign transaction
+        const transaction = await client.transaction.build.simple({
+          sender: account.accountAddress,
+          data: payload,
+        });
+
+        const senderAuthenticator = client.transaction.sign({
+          signer: account,
+          transaction,
+        });
+
+        const pendingTx = await client.transaction.submit.simple({
+          transaction,
+          senderAuthenticator,
+        });
+
+        const txResult = await client.waitForTransaction({
+          transactionHash: pendingTx.hash,
+        });
+
+        console.log("✅ Transaction confirmed:", txResult.hash);
+        return txResult.hash;
+      }
+
+      throw new Error("Wallet not connected");
     },
-    [testWallet]
+    [testWallet, privyWallet, client]
   );
 
   // Sign a message
@@ -130,10 +150,34 @@ export function useWallet() {
         return testWallet.signMessage(message);
       }
 
-      throw new Error("Privy Movement wallet integration not yet implemented. Use test wallet mode.");
+      // For Privy wallet - use PrivyWalletContext
+      if (privyWallet) {
+        return privyWallet.signMessage(message);
+      }
+
+      throw new Error("Wallet not connected");
     },
-    [testWallet]
+    [testWallet, privyWallet]
   );
+
+  // Get the underlying account (for advanced operations)
+  const getAccount = useCallback(() => {
+    if (USE_TEST_WALLET && testWallet) {
+      return testWallet.getAccount();
+    }
+    if (privyWallet) {
+      return privyWallet.getAccount();
+    }
+    return null;
+  }, [testWallet, privyWallet]);
+
+  // Export private key (for backup)
+  const exportPrivateKey = useCallback(() => {
+    if (privyWallet) {
+      return privyWallet.exportPrivateKey();
+    }
+    return null;
+  }, [privyWallet]);
 
   return {
     ready: USE_TEST_WALLET ? true : ready,
@@ -143,6 +187,8 @@ export function useWallet() {
     sendMOVE,
     signAndSubmitTransaction,
     signMessage,
+    getAccount,
+    exportPrivateKey,
     client,
     network: activeNetwork,
   };

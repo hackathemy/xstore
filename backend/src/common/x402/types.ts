@@ -1,6 +1,6 @@
 /**
  * X402 Protocol Types for Movement Network (Move VM)
- * Adapted from EVM X402 standard for Move-based stablecoin payments
+ * Move-based stablecoin payments with gas sponsorship
  */
 
 // Supported stablecoins on Movement Network

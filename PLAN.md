@@ -38,9 +38,9 @@ xstore/
 │   ├── prisma/               # 공유 Prisma 스키마
 │   └── package.json
 │
-├── contracts/                # 스마트 컨트랙트 (기존)
-│   ├── TestUSD.sol
-│   └── XStorePayment.sol     # 신규: 결제/정산/환불 컨트랙트
+├── contracts/                # Move 컨트랙트 (참조용)
+│   └── # Movement Network의 기존 coin 모듈 사용
+│       # 별도 커스텀 컨트랙트 불필요 (coin::transfer 활용)
 │
 └── packages/                 # 공유 패키지
     └── shared/               # 타입, 상수 등
@@ -55,16 +55,18 @@ xstore/
 Client → Server(402) → Client(직접 전송) → Server(확인)
 ```
 
-### 2.2 새로운 흐름 (x402 대납)
+### 2.2 새로운 흐름 (x402 Fee Payer 트랜잭션)
 ```
 1. Client: 결제 요청 (탭 닫기)
 2. Server: 402 Payment Required + PaymentRequirements 반환
-3. Client: ERC-2612 permit 서명 생성 (USDC 승인)
-4. Client: X-PAYMENT 헤더에 서명 포함하여 재요청
-5. Server → Facilitator: 서명 검증
-6. Facilitator: 대납 트랜잭션 실행 (가스비 지불)
-   - transferWithAuthorization() 호출
-   - Client의 USDC → Store Owner에게 전송
+3. Client: Aptos SDK로 coin::transfer 트랜잭션 생성 (서명하지 않음)
+4. Server → Facilitator: Fee Payer 트랜잭션 구성
+   - Facilitator가 가스비 지불자(fee payer)로 설정
+   - Payer와 Facilitator 모두 서명 필요
+5. Client: 트랜잭션에 사용자 서명 추가
+6. Facilitator: Fee Payer 서명 추가 후 트랜잭션 제출
+   - coin::transfer 실행 (Client's USDC → Store Owner)
+   - Facilitator가 가스비 부담
 7. Server: 결제 완료 처리
 ```
 
@@ -92,22 +94,22 @@ Client → Server(402) → Client(직접 전송) → Server(확인)
 }
 ```
 
-#### PaymentPayload (Client 서명)
+#### PaymentPayload (Fee Payer 트랜잭션)
 ```typescript
 {
   x402Version: 1,
   scheme: "exact",
   network: "movement-testnet",
   payload: {
-    signature: "0x...",  // ERC-2612 permit 서명
-    authorization: {
-      from: "0x...",     // Payer
-      to: "0x...",       // Store owner
-      value: "10000000",
-      validAfter: "0",
-      validBefore: "1735689600",
-      nonce: "0x..."
-    }
+    // Move 트랜잭션 데이터
+    transaction: {
+      sender: "0x...",           // Payer (64 hex chars)
+      recipient: "0x...",        // Store owner (64 hex chars)
+      amount: "10000000",        // USDC amount
+      coinType: "0x...::usdc::USDC"
+    },
+    feePayer: "0x...",           // Facilitator address
+    expiresAt: "1735689600"
   }
 }
 ```
@@ -261,8 +263,7 @@ src/
 │   │   ├── facilitator.controller.ts
 │   │   ├── facilitator.service.ts
 │   │   └── blockchain/
-│   │       ├── evm.service.ts
-│   │       └── usdc.service.ts
+│   │       └── movement.service.ts  # Aptos SDK 기반 Move 트랜잭션
 │   │
 │   ├── settlements/
 │   │   ├── settlements.module.ts
@@ -332,7 +333,7 @@ PATCH  /api/refunds/:id/reject
 // facilitator.service.ts
 @Injectable()
 export class FacilitatorService {
-  private wallet: ethers.Wallet;  // Facilitator 지갑 (가스비 지불용)
+  private account: Account;  // Facilitator 계정 (Aptos SDK - 가스비 지불용)
 
   async verify(payload: PaymentPayload, requirements: PaymentRequirements) {
     // 1. 서명 검증
@@ -351,23 +352,36 @@ export class FacilitatorService {
   }
 
   async settle(payload: PaymentPayload, requirements: PaymentRequirements) {
-    // 1. USDC 컨트랙트 호출 (Facilitator가 가스비 지불)
-    const tx = await this.usdcContract.transferWithAuthorization(
-      payload.payload.authorization.from,
-      payload.payload.authorization.to,
-      payload.payload.authorization.value,
-      payload.payload.authorization.validAfter,
-      payload.payload.authorization.validBefore,
-      payload.payload.authorization.nonce,
-      payload.payload.signature
-    );
+    // 1. Fee Payer 트랜잭션 구성 (Aptos SDK)
+    const transaction = await this.aptos.transaction.build.simple({
+      sender: payload.payload.transaction.sender,
+      withFeePayer: true,  // Facilitator가 가스비 지불
+      data: {
+        function: "0x1::coin::transfer",
+        typeArguments: [payload.payload.transaction.coinType],
+        functionArguments: [
+          payload.payload.transaction.recipient,
+          payload.payload.transaction.amount
+        ]
+      }
+    });
 
-    await tx.wait();
+    // 2. Facilitator가 Fee Payer로 서명 후 제출
+    const signedTx = await this.aptos.transaction.signAsFeePayer({
+      signer: this.facilitatorAccount,
+      transaction
+    });
+
+    const result = await this.aptos.transaction.submit.simple({
+      transaction,
+      senderAuthenticator: payload.senderSignature,
+      feePayerAuthenticator: signedTx
+    });
 
     return {
       success: true,
-      transaction: tx.hash,
-      networkId: this.chainId
+      txHash: result.hash,
+      network: "movement-testnet"
     };
   }
 }
@@ -453,39 +467,60 @@ export class SettlementProcessor {
 
 ---
 
-## 8. 스마트 컨트랙트
+## 8. Move 기반 결제 처리
 
-### 8.1 XStorePayment.sol (선택적)
+### 8.1 Movement Network 코인 전송
 
-```solidity
-// 정산/환불을 온체인에서 처리할 경우
-contract XStorePayment {
-    IERC20 public usdc;
-    address public facilitator;
-    address public treasury;  // 플랫폼 수수료 수령
+Movement Network는 Aptos Move VM 기반으로, 별도 커스텀 컨트랙트 없이
+기본 `coin::transfer` 모듈을 활용합니다.
 
-    uint256 public constant FEE_RATE = 250;  // 2.5% = 250/10000
+```typescript
+// 결제 트랜잭션 (Aptos SDK)
+const paymentTransaction = {
+  function: "0x1::coin::transfer",
+  typeArguments: ["0x...::usdc::USDC"],  // Stablecoin type
+  functionArguments: [
+    recipientAddress,  // Store owner (64 hex chars)
+    amount             // USDC amount
+  ]
+};
 
-    // 정산 (Facilitator만 호출 가능)
-    function settle(
-        address storeOwner,
-        uint256 amount
-    ) external onlyFacilitator {
-        uint256 fee = (amount * FEE_RATE) / 10000;
-        uint256 netAmount = amount - fee;
+// 정산 - 수수료 차감 후 전송
+const settlementTransaction = {
+  function: "0x1::coin::transfer",
+  typeArguments: ["0x...::usdc::USDC"],
+  functionArguments: [
+    storeOwnerAddress,
+    netAmount  // amount - platformFee
+  ]
+};
 
-        usdc.transfer(treasury, fee);
-        usdc.transfer(storeOwner, netAmount);
-    }
+// 환불 트랜잭션
+const refundTransaction = {
+  function: "0x1::coin::transfer",
+  typeArguments: ["0x...::usdc::USDC"],
+  functionArguments: [
+    customerAddress,
+    refundAmount
+  ]
+};
+```
 
-    // 환불 (Store Owner 요청, Facilitator 실행)
-    function refund(
-        address customer,
-        uint256 amount
-    ) external onlyFacilitator {
-        usdc.transfer(customer, amount);
-    }
-}
+### 8.2 Fee Payer 트랜잭션 패턴
+
+```typescript
+// Facilitator가 가스비를 대납하는 패턴
+const transaction = await aptos.transaction.build.simple({
+  sender: payerAddress,
+  withFeePayer: true,  // Fee Payer 트랜잭션 활성화
+  data: paymentTransaction
+});
+
+// Facilitator 서명 추가
+await aptos.transaction.signAsFeePayer({
+  signer: facilitatorAccount,
+  transaction
+});
 ```
 
 ---
@@ -506,38 +541,30 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
 ```typescript
 // hooks/useX402Payment.ts
+import { Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk";
+
 export function useX402Payment() {
-  const { wallet } = useWallet();
+  const { signTransaction } = useWallet();  // Privy wallet hook
 
-  const createPaymentHeader = async (requirements: PaymentRequirements) => {
-    // 1. ERC-2612 permit 서명 생성
-    const domain = {
-      name: requirements.extra.name,
-      version: requirements.extra.version,
-      chainId: chainId,
-      verifyingContract: requirements.extra.address
+  const createPaymentPayload = async (requirements: PaymentRequirements) => {
+    // 1. Move 트랜잭션 데이터 구성
+    const transactionData = {
+      sender: requirements.payerAddress,
+      recipient: requirements.payTo,
+      amount: requirements.maxAmountRequired,
+      coinType: requirements.extra.coinType
     };
 
-    const types = {
-      Permit: [
-        { name: 'owner', type: 'address' },
-        { name: 'spender', type: 'address' },
-        { name: 'value', type: 'uint256' },
-        { name: 'nonce', type: 'uint256' },
-        { name: 'deadline', type: 'uint256' }
-      ]
-    };
-
-    const signature = await wallet.signTypedData(domain, types, value);
-
-    // 2. PaymentPayload 생성
+    // 2. Fee Payer 트랜잭션을 위한 서명 요청
+    // (실제 서명은 Facilitator의 서명과 함께 백엔드에서 처리)
     const payload = {
       x402Version: 1,
       scheme: 'exact',
       network: 'movement-testnet',
       payload: {
-        signature,
-        authorization: { ... }
+        transaction: transactionData,
+        feePayer: requirements.facilitator,
+        expiresAt: requirements.expiresAt
       }
     };
 
@@ -545,7 +572,12 @@ export function useX402Payment() {
     return btoa(JSON.stringify(payload));
   };
 
-  return { createPaymentHeader };
+  // Fee Payer 트랜잭션 서명
+  const signFeePayerTransaction = async (rawTransaction: string) => {
+    return await signTransaction(rawTransaction);
+  };
+
+  return { createPaymentPayload, signFeePayerTransaction };
 }
 ```
 
@@ -567,8 +599,8 @@ export function useX402Payment() {
 ### Phase 3: x402 결제 시스템 (2-3일)
 1. Facilitator 모듈 구현
 2. Payment 모듈 구현
-3. ERC-2612 서명 검증 로직
-4. 가스비 대납 트랜잭션 실행
+3. Move Fee Payer 트랜잭션 구현
+4. coin::transfer 기반 가스비 대납 실행
 5. 프론트엔드 x402 훅 구현
 
 ### Phase 4: 정산 시스템 (1일)
@@ -597,10 +629,10 @@ export function useX402Payment() {
 # Backend (.env)
 DATABASE_URL="postgresql://root:1234@localhost:5432/xstore"
 
-# Blockchain
-CHAIN_ID=30732
-RPC_URL="https://mevm.testnet.imola.movementlabs.xyz"
-USDC_CONTRACT_ADDRESS="0x..."
+# Blockchain (Movement Network - Move VM)
+MOVEMENT_NODE_URL="https://aptos.testnet.bardock.movementlabs.xyz/v1"
+MOVEMENT_FAUCET_URL="https://faucet.testnet.bardock.movementlabs.xyz"
+STABLECOIN_COIN_TYPE="0x...::usdc::USDC"
 
 # Facilitator
 FACILITATOR_PRIVATE_KEY="0x..."
@@ -620,7 +652,7 @@ NEXT_PUBLIC_API_URL="http://localhost:3001"
 
 ### 12.1 Movement Network USDC
 - Movement Testnet에 공식 USDC가 없을 수 있음
-- 대안: TestUSD 컨트랙트에 ERC-2612 permit 기능 추가
+- 대안: Move 기반 테스트 스테이블코인 사용 (coin::transfer 지원)
 
 ### 12.2 Facilitator 보안
 - 개인키 관리 (HSM, Vault 권장)

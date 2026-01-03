@@ -177,6 +177,48 @@ class ApiClient {
   async getFacilitatorStatus() {
     return this.request<any>('/facilitator/status');
   }
+
+  // X402 Payment Protocol (Gas Sponsorship)
+  async buildSponsoredTransaction(data: { tabId: string; payerAddress: string; currency?: 'USDC' | 'USDT' }) {
+    return this.request<{
+      paymentId: string;
+      transactionBytes: string;
+      feePayerAddress: string;
+      payment: {
+        amount: string;
+        amountFormatted: string;
+        currency: string;
+        coinType: string;
+        decimals: number;
+        recipient: string;
+      };
+      message: string;
+    }>('/x402/build-sponsored', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async submitSponsoredTransaction(data: { paymentId: string; transactionBytes: string; senderAuthenticatorBytes: string }) {
+    return this.request<{
+      valid: boolean;
+      paymentId: string;
+      txHash?: string;
+      status: string;
+      error?: string;
+    }>('/x402/submit-sponsored', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getX402SponsorshipStatus() {
+    return this.request<{
+      available: boolean;
+      facilitatorAddress: string;
+      balance: string;
+    }>('/x402/sponsorship-status');
+  }
 }
 
 export const api = new ApiClient(API_BASE_URL);

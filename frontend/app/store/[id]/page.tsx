@@ -14,6 +14,9 @@ import {
 } from "@/components/ui/select";
 import useStore from "@/hooks/useStore";
 import { useWallet } from "@/hooks/useWallet";
+import { usePayment } from "@/hooks/usePayment";
+import { USE_TEST_WALLET } from "@/context";
+import { api } from "@/lib/api";
 import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -23,6 +26,7 @@ export default function StorePage() {
   const router = useRouter();
   const { id } = params as { id: string };
   const { address, isConnected, getBalance, sendMOVE } = useWallet();
+  const { payTab } = usePayment();
   const { data: store } = useStore(id);
   const [count, setCount] = useState("1");
   const [tip, setTip] = useState("10");
@@ -50,19 +54,52 @@ export default function StorePage() {
 
     setIsLoading(true);
     try {
-      const hash = await sendMOVE(store.owner, totalPrice);
+      let hash: string | undefined;
 
-      await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      if (USE_TEST_WALLET) {
+        // Test wallet mode: direct MOVE transfer
+        hash = await sendMOVE(store.owner, totalPrice);
+
+        await fetch("/api/orders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeId: store.id,
+            count,
+            price: totalPrice.toString(),
+            customer: address,
+            hash,
+          }),
+        });
+      } else {
+        // Privy wallet mode: Create Tab and use X402 gas sponsorship
+        console.log("🔐 Using Privy wallet with X402 gas sponsorship...");
+
+        // Step 1: Create a Tab for this order
+        const tab = await api.createTab({
           storeId: store.id,
-          count,
-          price: totalPrice.toString(),
-          customer: address,
-          hash,
-        }),
-      });
+          tableNumber: 1, // Quick order - default table
+        });
+        console.log("📋 Created tab:", tab.id);
+
+        // Step 2: Add the item(s) to the Tab
+        await api.addItemToTab(tab.id, {
+          name: store.menu,
+          price: store.price,
+          quantity: parseInt(count),
+        });
+        console.log("➕ Added item to tab");
+
+        // Step 3: Pay the Tab using X402 sponsored transaction
+        const result = await payTab(tab.id);
+
+        if (!result.success) {
+          throw new Error(result.error || "Payment failed");
+        }
+
+        hash = result.txHash;
+        console.log("✅ Payment successful:", hash);
+      }
 
       alert("Order Success!");
     } catch (error) {
@@ -71,7 +108,7 @@ export default function StorePage() {
     } finally {
       setIsLoading(false);
     }
-  }, [sendMOVE, address, store, count, isConnected, totalPrice]);
+  }, [sendMOVE, payTab, address, store, count, isConnected, totalPrice]);
 
   if (!store) {
     return (

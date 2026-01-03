@@ -9,6 +9,7 @@ import {
   AccountAddress,
   InputGenerateTransactionPayloadData,
   SimpleTransaction,
+  Network,
 } from "@aptos-labs/ts-sdk";
 import {
   getActiveNetwork,
@@ -40,7 +41,7 @@ interface TestWalletContextType {
   signMessage: (message: string) => Promise<string>;
   transferCoin: (to: string, amount: number) => Promise<string>;
   transferStablecoin: (to: string, amount: number, coinType?: string) => Promise<string>;
-  getClient: () => Aptos;
+  getClient: () => Aptos | null;
   getAccount: () => Account;
 }
 
@@ -48,14 +49,20 @@ const TestWalletContext = createContext<TestWalletContextType | null>(null);
 
 export function TestWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
-  const [client] = useState(() => {
+  // Initialize client in useEffect to ensure it runs only in browser
+  const [client, setClient] = useState<Aptos | null>(null);
+
+  // Create client on mount (browser only) to use proxy URLs
+  useEffect(() => {
     const network = getActiveNetwork();
     const config = new AptosConfig({
+      network: Network.CUSTOM,
       fullnode: network.nodeUrl,
       faucet: network.faucetUrl,
     });
-    return new Aptos(config);
-  });
+    setClient(new Aptos(config));
+    console.log("🔧 TestWallet Aptos client initialized with URL:", network.nodeUrl);
+  }, []);
 
   const [account] = useState(() => {
     try {
@@ -80,7 +87,7 @@ export function TestWalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const getBalance = useCallback(async (): Promise<string> => {
-    if (!address) return "0";
+    if (!address || !client) return "0";
 
     try {
       const resources = await client.getAccountResources({
@@ -106,6 +113,7 @@ export function TestWalletProvider({ children }: { children: ReactNode }) {
     payload: InputGenerateTransactionPayloadData
   ): Promise<string> => {
     if (!address) throw new Error("Wallet not connected");
+    if (!client) throw new Error("Client not initialized");
 
     try {
       // Build transaction
@@ -164,7 +172,7 @@ export function TestWalletProvider({ children }: { children: ReactNode }) {
 
   // Get stablecoin balance (USDC, USDT, etc.)
   const getStablecoinBalance = useCallback(async (coinType?: string): Promise<string> => {
-    if (!address) return "0";
+    if (!address || !client) return "0";
 
     const targetCoinType = coinType || getPaymentStablecoin().coinType;
     const stablecoin = getPaymentStablecoin();

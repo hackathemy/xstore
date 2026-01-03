@@ -10,6 +10,7 @@ import {
   AccountAuthenticator,
   Deserializer,
   SimpleTransaction,
+  Network,
 } from '@aptos-labs/ts-sdk';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -56,6 +57,37 @@ const MOVEMENT_LOCAL: MovementNetworkConfig = {
 // Coin decimals
 const MOVE_DECIMALS = 8;
 const STABLECOIN_DECIMALS = 6;
+
+/**
+ * Validate and normalize address to Move format (64 hex chars / 32 bytes).
+ * Accepts both:
+ * - EVM addresses (40 hex chars / 20 bytes) - will be left-padded to 64 chars
+ * - Move addresses (64 hex chars / 32 bytes) - returned as-is
+ */
+function validateMoveAddress(address: string): string {
+  // Remove 0x prefix if present
+  let cleanAddress = address.startsWith('0x') ? address.slice(2) : address;
+
+  // Validate hex characters
+  if (!/^[0-9a-fA-F]+$/.test(cleanAddress)) {
+    throw new Error(`Invalid address: contains non-hex characters - ${address}`);
+  }
+
+  // Accept EVM addresses (40 hex chars) and convert to Move format
+  if (cleanAddress.length === 40) {
+    // Left-pad with zeros to create 64 char Move address
+    cleanAddress = cleanAddress.padStart(64, '0');
+  }
+
+  // Move addresses must be exactly 64 hex chars (32 bytes)
+  if (cleanAddress.length !== 64) {
+    throw new Error(
+      `Invalid address: expected 40 (EVM) or 64 (Move) hex chars, got ${cleanAddress.length} - ${address}.`
+    );
+  }
+
+  return `0x${cleanAddress}`;
+}
 
 // Native MOVE coin type
 const MOVE_COIN_TYPE = '0x1::aptos_coin::AptosCoin';
@@ -147,6 +179,7 @@ export class FacilitatorService {
 
     // Initialize Aptos client
     const config = new AptosConfig({
+      network: Network.CUSTOM,
       fullnode: this.networkConfig.nodeUrl,
       faucet: this.networkConfig.faucetUrl,
     });
@@ -199,8 +232,8 @@ export class FacilitatorService {
 
   /**
    * Generate payment data for Move transaction
-   * Unlike EVM, Move doesn't need signatures for approval
-   * The client will directly execute the transfer
+   * Move uses coin::transfer with Fee Payer pattern
+   * Facilitator pays gas fees, client executes transfer
    */
   async generatePaymentData(params: PaymentDataParams) {
     const { from, to, amount, paymentId, coinType, useStablecoin } = params;
@@ -738,23 +771,29 @@ export class FacilitatorService {
     const { senderAddress, recipient, amount, coinType } = params;
     const isStablecoin = coinType !== MOVE_COIN_TYPE;
 
+    // Validate Move addresses (must be 64 hex chars / 32 bytes)
+    const validRecipient = validateMoveAddress(recipient);
+    const validSender = validateMoveAddress(senderAddress);
+
+    this.logger.debug(`Validated Move addresses: recipient=${validRecipient}, sender=${validSender}`);
+
     let payload: InputGenerateTransactionPayloadData;
     if (isStablecoin) {
       payload = {
         function: '0x1::coin::transfer',
         typeArguments: [coinType],
-        functionArguments: [AccountAddress.from(recipient), BigInt(amount)],
+        functionArguments: [AccountAddress.from(validRecipient), BigInt(amount)],
       };
     } else {
       payload = {
         function: '0x1::aptos_account::transfer',
-        functionArguments: [AccountAddress.from(recipient), BigInt(amount)],
+        functionArguments: [AccountAddress.from(validRecipient), BigInt(amount)],
       };
     }
 
     // Build transaction with fee payer
     const transaction = await this.client.transaction.build.simple({
-      sender: AccountAddress.from(senderAddress),
+      sender: AccountAddress.from(validSender),
       data: payload,
       withFeePayer: true,
     });
@@ -836,6 +875,7 @@ export class FacilitatorService {
 
   /**
    * Check if gas sponsorship is available
+   * In development mode, skip balance check to allow testing without funding
    */
   async isGasSponsorshipAvailable(): Promise<{
     available: boolean;
@@ -844,6 +884,20 @@ export class FacilitatorService {
   }> {
     if (!this.facilitatorAccount) {
       return { available: false };
+    }
+
+    // In development mode, skip balance check for easier testing
+    // Check if NOT production (more robust than checking for exact 'development' string)
+    const nodeEnv = this.configService.get<string>('NODE_ENV') || '';
+    const isDev = nodeEnv !== 'production';
+    this.logger.debug(`NODE_ENV check: "${nodeEnv}", isDev: ${isDev}`);
+    if (isDev) {
+      this.logger.debug('Development mode: skipping balance check for gas sponsorship');
+      return {
+        available: true,
+        facilitatorAddress: this.facilitatorAccount.accountAddress.toString(),
+        balance: '0 (dev mode)',
+      };
     }
 
     const balanceInfo = await this.checkFacilitatorBalance();

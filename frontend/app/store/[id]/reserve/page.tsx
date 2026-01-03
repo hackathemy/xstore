@@ -16,6 +16,9 @@ import {
 } from "@/components/ui/select";
 import useStore from "@/hooks/useStore";
 import { useWallet } from "@/hooks/useWallet";
+import { usePayment } from "@/hooks/usePayment";
+import { USE_TEST_WALLET } from "@/context";
+import { api } from "@/lib/api";
 import { usePrivy } from "@privy-io/react-auth";
 import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
@@ -26,9 +29,9 @@ export default function ReservePage() {
   const router = useRouter();
   const { id } = params as { id: string };
   const { user, authenticated } = usePrivy();
-  const address = user?.wallet?.address;
   const { data: store } = useStore(id);
-  const { sendMOVE, isConnected, getBalance } = useWallet();
+  const { sendMOVE, isConnected, getBalance, address } = useWallet();
+  const { payTab } = usePayment();
 
   const [customerName, setCustomerName] = useState("");
   const [phone, setPhone] = useState("");
@@ -63,44 +66,109 @@ export default function ReservePage() {
 
     setIsLoading(true);
     try {
-      // Step 1: Try to create reservation (will get 402)
-      const initialResponse = await fetch("/api/reservations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          storeId: store.id,
-          customer: address,
-          customerName,
-          phone,
-          date,
-          time,
-          partySize,
-          note,
-        }),
-      });
+      let txHash: string | undefined;
 
-      // Handle 402 Payment Required
-      if (initialResponse.status === 402) {
-        const paymentInfo = await initialResponse.json();
-        console.log("Payment required:", paymentInfo);
+      if (USE_TEST_WALLET) {
+        // Test wallet mode: direct MOVE transfer
+        // Step 1: Try to create reservation (will get 402)
+        const initialResponse = await fetch("/api/reservations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeId: store.id,
+            customer: address,
+            customerName,
+            phone,
+            date,
+            time,
+            partySize,
+            note,
+          }),
+        });
+
+        // Handle 402 Payment Required
+        if (initialResponse.status === 402) {
+          const paymentInfo = await initialResponse.json();
+          console.log("Payment required:", paymentInfo);
+
+          setPaymentStatus("paying");
+
+          // Step 2: Send payment to store owner
+          txHash = await sendMOVE(store.owner, parseFloat(RESERVATION_FEE));
+
+          if (!txHash) {
+            throw new Error("Payment failed");
+          }
+
+          setPaymentStatus("paid");
+
+          // Step 3: Retry with payment proof
+          const paidResponse = await fetch("/api/reservations", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-payment": txHash,
+              "x-payment-recipient": store.owner,
+            },
+            body: JSON.stringify({
+              storeId: store.id,
+              customer: address,
+              customerName,
+              phone,
+              date,
+              time,
+              partySize,
+              note,
+              paymentTxHash: txHash,
+            }),
+          });
+
+          if (!paidResponse.ok) {
+            throw new Error("Failed to create reservation after payment");
+          }
+        } else if (initialResponse.ok) {
+          // No payment required
+        } else {
+          throw new Error("Failed to create reservation");
+        }
+      } else {
+        // Privy wallet mode: Create Tab and use X402 gas sponsorship
+        console.log("🔐 Using Privy wallet with X402 gas sponsorship for reservation...");
 
         setPaymentStatus("paying");
 
-        // Step 2: Send payment to store owner
-        const txHash = await sendMOVE(store.owner, parseFloat(RESERVATION_FEE));
+        // Step 1: Create a Tab for the reservation fee
+        const tab = await api.createTab({
+          storeId: store.id,
+          tableNumber: 1, // Reservation - default table
+        });
+        console.log("📋 Created tab for reservation:", tab.id);
 
-        if (!txHash) {
-          throw new Error("Payment failed");
+        // Step 2: Add reservation fee to the Tab
+        await api.addItemToTab(tab.id, {
+          name: `Reservation: ${customerName} - ${date} ${time}`,
+          price: RESERVATION_FEE,
+          quantity: 1,
+        });
+        console.log("➕ Added reservation fee to tab");
+
+        // Step 3: Pay the Tab using X402 sponsored transaction
+        const result = await payTab(tab.id);
+
+        if (!result.success) {
+          throw new Error(result.error || "Payment failed");
         }
 
+        txHash = result.txHash;
         setPaymentStatus("paid");
+        console.log("✅ Reservation payment successful:", txHash);
 
-        // Step 3: Retry with payment proof
-        const paidResponse = await fetch("/api/reservations", {
+        // Step 4: Create the reservation with payment proof
+        const reservationResponse = await fetch("/api/reservations", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-payment": txHash,
+            "x-payment": txHash || "",
             "x-payment-recipient": store.owner,
           },
           body: JSON.stringify({
@@ -116,22 +184,13 @@ export default function ReservePage() {
           }),
         });
 
-        if (!paidResponse.ok) {
+        if (!reservationResponse.ok) {
           throw new Error("Failed to create reservation after payment");
         }
-
-        alert(`Reservation submitted successfully!\nPayment TX: ${txHash.slice(0, 10)}...`);
-        router.push(`/store/${store.id}`);
-        return;
       }
 
-      // If no payment required (shouldn't happen but handle it)
-      if (initialResponse.ok) {
-        alert("Reservation submitted successfully!");
-        router.push(`/store/${store.id}`);
-      } else {
-        throw new Error("Failed to create reservation");
-      }
+      alert(`Reservation submitted successfully!${txHash ? `\nPayment TX: ${txHash.slice(0, 10)}...` : ""}`);
+      router.push(`/store/${store.id}`);
     } catch (error) {
       console.error("Error creating reservation:", error);
       alert("Failed to create reservation. Please try again.");

@@ -416,25 +416,26 @@ x-payment-recipient: <wallet-address>  // For reservations
 X-Payment-Required: {"version":"1","network":"movement-testnet","amount":"0.001","currency":"MOVE","recipient":"0x..."}
 ```
 
-### Movement Chain Configuration
+### Movement Network Configuration
 
 ```typescript
-// lib/chains.ts
-export const movementTestnet = defineChain({
-  id: 30732,
+// lib/movement.ts
+// Movement Network uses Move VM with Aptos SDK
+const MOVEMENT_TESTNET = {
   name: 'Movement Testnet',
+  nodeUrl: 'https://aptos.testnet.bardock.movementlabs.xyz/v1',
+  faucetUrl: 'https://faucet.testnet.bardock.movementlabs.xyz',
+  chainId: 250,
   nativeCurrency: {
-    decimals: 18,
+    decimals: 8,  // Move uses 8 decimals (Octas)
     name: 'Move',
     symbol: 'MOVE',
   },
-  rpcUrls: {
-    default: { http: ['https://mevm.testnet.imola.movementlabs.xyz'] },
-  },
-  blockExplorers: {
-    default: { url: 'https://explorer.movementlabs.xyz' },
-  },
-});
+  explorer: 'https://explorer.movementnetwork.xyz',
+};
+
+// Move addresses are 64 hex characters (32 bytes)
+// Example: 0x0000000000000000000000000000000000000000000000000000000000000001
 ```
 
 ---

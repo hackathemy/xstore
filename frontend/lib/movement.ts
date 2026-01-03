@@ -18,12 +18,26 @@ export interface MovementNetworkConfig {
   isTestnet: boolean;
 }
 
-// Movement Testnet (Bardock)
+// Check if we're in browser environment
+const isBrowser = typeof window !== 'undefined';
+
+// Get base URL for proxy (use relative path in browser)
+function getProxyUrl(path: string): string {
+  if (isBrowser) {
+    // In browser, use relative path for Next.js proxy
+    return path;
+  }
+  // On server-side, use full URL
+  return path.startsWith('/') ? `http://localhost:3000${path}` : path;
+}
+
+// Movement Testnet
 export const MOVEMENT_TESTNET: MovementNetworkConfig = {
   name: 'Movement Testnet',
-  nodeUrl: 'https://aptos.testnet.bardock.movementlabs.xyz/v1',
-  faucetUrl: 'https://faucet.testnet.bardock.movementlabs.xyz',
-  explorerUrl: 'https://explorer.movementlabs.xyz/?network=bardock+testnet',
+  // Use Next.js proxy to avoid CORS issues in browser
+  nodeUrl: isBrowser ? '/movement-rpc' : 'https://testnet.movementnetwork.xyz/v1',
+  faucetUrl: 'https://faucet.movementnetwork.xyz',
+  explorerUrl: 'https://explorer.movementlabs.xyz/?network=testnet',
   chainId: 250,
   isTestnet: true,
 };
@@ -31,7 +45,8 @@ export const MOVEMENT_TESTNET: MovementNetworkConfig = {
 // Movement Mainnet
 export const MOVEMENT_MAINNET: MovementNetworkConfig = {
   name: 'Movement Mainnet',
-  nodeUrl: 'https://mainnet.movementnetwork.xyz/v1',
+  // Use Next.js proxy to avoid CORS issues in browser
+  nodeUrl: isBrowser ? '/movement-mainnet' : 'https://mainnet.movementnetwork.xyz/v1',
   explorerUrl: 'https://explorer.movementlabs.xyz/?network=mainnet',
   chainId: 126,
   isTestnet: false,
@@ -65,7 +80,9 @@ export function getActiveNetwork(): MovementNetworkConfig {
 export function createMovementClient(network?: MovementNetworkConfig): Aptos {
   const activeNetwork = network || getActiveNetwork();
 
+  // Use CUSTOM network type for Movement endpoints
   const config = new AptosConfig({
+    network: Network.CUSTOM,
     fullnode: activeNetwork.nodeUrl,
     faucet: activeNetwork.faucetUrl,
   });
