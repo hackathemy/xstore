@@ -195,7 +195,7 @@ export default function TableOrderPage() {
               </div>
               <div>
                 <p className="text-sm text-emerald-400">Your tab is open</p>
-                <p className="text-lg font-bold text-white">{tab.totalAmount} MOVE</p>
+                <p className="text-lg font-bold text-white">{tab.totalAmount} USDC</p>
               </div>
             </div>
             <Button
@@ -234,7 +234,7 @@ export default function TableOrderPage() {
                       {item.description && (
                         <p className="text-xs text-gray-500 truncate">{item.description}</p>
                       )}
-                      <p className="text-sm text-violet-400 font-medium mt-1">{item.price} MOVE</p>
+                      <p className="text-sm text-violet-400 font-medium mt-1">{item.price} USDC</p>
                     </div>
                     <div className="flex items-center gap-2 ml-4">
                       {cartItem ? (
@@ -278,7 +278,7 @@ export default function TableOrderPage() {
         {(!menuItems || menuItems.length === 0) && (
           <div className="card-elevated p-4 mb-4">
             <h4 className="font-medium text-white">{store.menu}</h4>
-            <p className="text-sm text-violet-400 font-medium mt-1">{store.price} MOVE</p>
+            <p className="text-sm text-violet-400 font-medium mt-1">{store.price} USDC</p>
             <Button
               size="sm"
               className="mt-3 bg-violet-600 hover:bg-violet-700"
@@ -314,7 +314,7 @@ export default function TableOrderPage() {
                   {cart.reduce((sum, c) => sum + c.quantity, 0)} items
                 </span>
               </div>
-              <span className="font-bold text-xl gradient-text">{cartTotal.toFixed(4)} MOVE</span>
+              <span className="font-bold text-xl gradient-text">{cartTotal.toFixed(4)} USDC</span>
             </div>
             <Button
               className="w-full h-12 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-700 hover:to-fuchsia-700 font-semibold"

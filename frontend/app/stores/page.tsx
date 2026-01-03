@@ -90,7 +90,7 @@ export default function StoresPage() {
 
                 <div className="flex justify-between items-center mb-4">
                   <span className="text-sm text-gray-500">{store.menu}</span>
-                  <span className="text-violet-400 font-bold">{store.price} MOVE</span>
+                  <span className="text-violet-400 font-bold">{store.price} USDC</span>
                 </div>
 
                 {/* Action Buttons */}

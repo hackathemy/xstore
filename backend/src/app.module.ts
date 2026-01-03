@@ -14,6 +14,8 @@ import { FacilitatorModule } from './modules/facilitator/facilitator.module';
 import { SettlementsModule } from './modules/settlements/settlements.module';
 import { RefundsModule } from './modules/refunds/refunds.module';
 import { X402Module } from './modules/x402/x402.module';
+import { FaucetModule } from './modules/faucet/faucet.module';
+import { AiChatModule } from './modules/ai-chat/ai-chat.module';
 
 @Module({
   imports: [
@@ -31,6 +33,8 @@ import { X402Module } from './modules/x402/x402.module';
     SettlementsModule,
     RefundsModule,
     X402Module,
+    FaucetModule,
+    AiChatModule,
   ],
 })
 export class AppModule {}

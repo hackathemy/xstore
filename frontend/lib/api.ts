@@ -219,6 +219,82 @@ class ApiClient {
       balance: string;
     }>('/x402/sponsorship-status');
   }
+
+  // Faucet
+  async getFaucetInfo() {
+    return this.request<{
+      tokenName: string;
+      tokenSymbol: string;
+      coinType: string;
+      decimals: number;
+      amountPerRequest: string;
+      network: string;
+      nodeUrl: string;
+    }>('/faucet/info');
+  }
+
+  async requestFaucet(address: string) {
+    return this.request<{
+      success: boolean;
+      txHash?: string;
+      amount?: string;
+      error?: string;
+    }>('/faucet/request', {
+      method: 'POST',
+      body: JSON.stringify({ address }),
+    });
+  }
+
+  async getFaucetBalance(address: string) {
+    return this.request<{
+      address: string;
+      balance: string;
+      symbol: string;
+    }>(`/faucet/balance?address=${encodeURIComponent(address)}`);
+  }
+
+  // AI Chat
+  async aiChat(data: {
+    message: string;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    userAddress?: string;
+  }) {
+    return this.request<{
+      message: string;
+      stores?: any[];
+      menuItems?: any[];
+      selectedStore?: any;
+      selectedItems?: any[];
+      action?: 'search_stores' | 'search_menu' | 'create_order' | 'show_results' | 'confirm_order';
+      orderSummary?: {
+        storeId: string;
+        storeName: string;
+        storeOwner?: string;
+        items: Array<{ id: string; name: string; price: string; quantity: number; subtotal: string }>;
+        totalAmount: string;
+      };
+    }>('/ai-chat/chat', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async aiSearchStores(query?: string) {
+    const endpoint = query ? `/ai-chat/stores?query=${encodeURIComponent(query)}` : '/ai-chat/stores';
+    return this.request<any[]>(endpoint);
+  }
+
+  async aiGetStoreMenu(storeId: string) {
+    return this.request<any[]>(`/ai-chat/menu?storeId=${encodeURIComponent(storeId)}`);
+  }
+
+  async aiSearchMenuItems(query: string, storeId?: string) {
+    let endpoint = `/ai-chat/menu-items?query=${encodeURIComponent(query)}`;
+    if (storeId) {
+      endpoint += `&storeId=${encodeURIComponent(storeId)}`;
+    }
+    return this.request<any[]>(endpoint);
+  }
 }
 
 export const api = new ApiClient(API_BASE_URL);

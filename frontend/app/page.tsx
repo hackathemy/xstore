@@ -48,17 +48,39 @@ export default function Home() {
             Browse All Stores
           </Button>
           {authenticated && (
-            <Button
-              onClick={() => router.push("/my-tabs")}
-              variant="outline"
-              className="w-full h-12 bg-white/5 border-white/10 hover:bg-white/10 hover:border-violet-500/50 transition-all duration-300"
-            >
-              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
-              My Tabs
-            </Button>
+            <>
+              <Button
+                onClick={() => router.push("/my-tabs")}
+                variant="outline"
+                className="w-full h-12 bg-white/5 border-white/10 hover:bg-white/10 hover:border-violet-500/50 transition-all duration-300"
+              >
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                My Tabs
+              </Button>
+              <Button
+                onClick={() => router.push("/charge")}
+                variant="outline"
+                className="w-full h-12 bg-gradient-to-r from-green-500/10 to-emerald-500/10 border-green-500/30 hover:bg-green-500/20 hover:border-green-500/50 transition-all duration-300"
+              >
+                <svg className="w-5 h-5 mr-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-green-400">TUSDC Faucet</span>
+              </Button>
+            </>
           )}
+          <Button
+            onClick={() => router.push("/chat")}
+            variant="outline"
+            className="w-full h-12 bg-gradient-to-r from-violet-500/10 to-fuchsia-500/10 border-violet-500/30 hover:bg-violet-500/20 hover:border-violet-500/50 transition-all duration-300"
+          >
+            <svg className="w-5 h-5 mr-2 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            </svg>
+            <span className="text-violet-400">AI Assistant</span>
+          </Button>
         </div>
 
         {/* Store Owner Dashboard */}
@@ -145,7 +167,7 @@ export default function Home() {
                   <p className="text-sm text-gray-400 line-clamp-2">{store.description}</p>
                   <div className="mt-2 flex items-center gap-2">
                     <span className="text-sm text-gray-500">{store.menu}</span>
-                    <span className="text-violet-400 font-medium">{store.price} MOVE</span>
+                    <span className="text-violet-400 font-medium">{store.price} USDC</span>
                   </div>
                 </div>
               </div>
@@ -181,7 +203,7 @@ export default function Home() {
                   { icon: "🏪", title: "Create Store", desc: "Set up your store in seconds with Privy" },
                   { icon: "📱", title: "QR Tables", desc: "Generate QR codes for each table" },
                   { icon: "💳", title: "Tab System", desc: "Customers order & pay at the end" },
-                  { icon: "⚡", title: "x402 Payments", desc: "Seamless crypto with MOVE tokens" },
+                  { icon: "⚡", title: "x402 Payments", desc: "Seamless crypto with USDC stablecoin" },
                 ].map((item, i) => (
                   <div key={i} className="flex items-start gap-3">
                     <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center flex-shrink-0">

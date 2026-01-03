@@ -216,7 +216,7 @@ export default function ReservePage() {
       if (paymentStatus === "paid") return "Confirming Reservation...";
       return "Submitting...";
     }
-    return `Reserve (${RESERVATION_FEE} MOVE fee)`;
+    return `Reserve (${RESERVATION_FEE} USDC fee)`;
   };
 
   if (!store) {
@@ -269,12 +269,12 @@ export default function ReservePage() {
             </div>
             <div>
               <p className="text-sm text-yellow-200">
-                A small reservation fee of <strong>{RESERVATION_FEE} MOVE</strong> is required.
+                A small reservation fee of <strong>{RESERVATION_FEE} USDC</strong> is required.
                 This helps prevent no-shows and goes to the store owner.
               </p>
               {isConnected && balance && (
                 <p className="text-xs text-yellow-300/80 mt-1">
-                  Your balance: {parseFloat(balance).toFixed(4)} MOVE
+                  Your balance: {parseFloat(balance).toFixed(4)} USDC
                 </p>
               )}
             </div>

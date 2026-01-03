@@ -285,7 +285,7 @@ export default function ManagePage() {
                 className="bg-white/5 border-white/10"
               />
               <Input
-                placeholder="Price (in MOVE)"
+                placeholder="Price (in USDC)"
                 value={menuPrice}
                 onChange={(e) => setMenuPrice(e.target.value)}
                 className="bg-white/5 border-white/10"
@@ -317,7 +317,7 @@ export default function ManagePage() {
                   {item.description && (
                     <p className="text-sm text-gray-400">{item.description}</p>
                   )}
-                  <p className="text-violet-400 font-medium mt-1">{item.price} MOVE</p>
+                  <p className="text-violet-400 font-medium mt-1">{item.price} USDC</p>
                 </div>
               </div>
             ))}
@@ -365,7 +365,7 @@ export default function ManagePage() {
                     )}
                   </div>
                   <div className="text-right">
-                    <p className="font-bold text-violet-400">{tab.totalAmount} MOVE</p>
+                    <p className="font-bold text-violet-400">{tab.totalAmount} USDC</p>
                     <Badge className="bg-emerald-500/20 text-emerald-400 border-0">{tab.status}</Badge>
                   </div>
                 </div>

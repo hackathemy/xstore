@@ -1,0 +1,10 @@
+[package]
+name = "TUSDC"
+version = "1.0.0"
+authors = ["XStore"]
+
+[addresses]
+tusdc = "_"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/movementlabsxyz/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "main" }

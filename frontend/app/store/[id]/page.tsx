@@ -165,7 +165,7 @@ export default function StorePage() {
           <div className="flex justify-between items-center">
             <span className="text-gray-300">{store.menu}</span>
             <span className="text-violet-400 font-bold text-lg">
-              {store.price} MOVE
+              {store.price} USDC
             </span>
           </div>
         </div>
@@ -236,13 +236,13 @@ export default function StorePage() {
           <div className="flex justify-between items-center mb-4">
             <span className="text-gray-400">Total</span>
             <span className="text-2xl font-bold gradient-text">
-              {totalPrice} MOVE
+              {totalPrice} USDC
             </span>
           </div>
 
           {isConnected && balance && (
             <p className="text-sm text-gray-500 mb-4 text-center">
-              Your balance: {parseFloat(balance).toFixed(4)} MOVE
+              Your balance: {parseFloat(balance).toFixed(4)} USDC
             </p>
           )}
 

@@ -59,30 +59,22 @@ const MOVE_DECIMALS = 8;
 const STABLECOIN_DECIMALS = 6;
 
 /**
- * Validate and normalize address to Move format (64 hex chars / 32 bytes).
- * Accepts both:
- * - EVM addresses (40 hex chars / 20 bytes) - will be left-padded to 64 chars
- * - Move addresses (64 hex chars / 32 bytes) - returned as-is
+ * Validate Move address format (64 hex chars / 32 bytes).
+ * Only accepts Move format addresses.
  */
 function validateMoveAddress(address: string): string {
   // Remove 0x prefix if present
-  let cleanAddress = address.startsWith('0x') ? address.slice(2) : address;
+  const cleanAddress = address.startsWith('0x') ? address.slice(2) : address;
 
   // Validate hex characters
   if (!/^[0-9a-fA-F]+$/.test(cleanAddress)) {
-    throw new Error(`Invalid address: contains non-hex characters - ${address}`);
-  }
-
-  // Accept EVM addresses (40 hex chars) and convert to Move format
-  if (cleanAddress.length === 40) {
-    // Left-pad with zeros to create 64 char Move address
-    cleanAddress = cleanAddress.padStart(64, '0');
+    throw new Error(`Invalid Move address: contains non-hex characters - ${address}`);
   }
 
   // Move addresses must be exactly 64 hex chars (32 bytes)
   if (cleanAddress.length !== 64) {
     throw new Error(
-      `Invalid address: expected 40 (EVM) or 64 (Move) hex chars, got ${cleanAddress.length} - ${address}.`
+      `Invalid Move address: expected 64 hex chars, got ${cleanAddress.length} - ${address}`
     );
   }
 

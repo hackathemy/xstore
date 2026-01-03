@@ -68,7 +68,7 @@ export default function OrdersPage() {
                 <Badge variant="outline" className="border-white/20 text-gray-400">
                   {ellipsisAddress(order.customer)}
                 </Badge>
-                <span className="font-bold text-violet-400">{order.price} MOVE</span>
+                <span className="font-bold text-violet-400">{order.price} USDC</span>
               </div>
               <div className="flex justify-between items-center text-sm">
                 <span className="text-gray-500">

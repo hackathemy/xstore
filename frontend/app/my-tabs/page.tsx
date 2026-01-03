@@ -127,7 +127,7 @@ export default function MyTabsPage() {
                 </div>
                 <div className="text-right">
                   <p className="font-bold text-violet-400 mb-1">
-                    {tab.totalAmount} MOVE
+                    {tab.totalAmount} USDC
                   </p>
                   <StatusBadge status={tab.status as TabStatus} type="tab" />
                 </div>
