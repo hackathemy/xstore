@@ -83,22 +83,27 @@ function loadStoredWallet(userId: string): Account | null {
 }
 
 /**
- * Derive Ed25519 wallet from Privy user ID and embedded wallet address
- * No signing required - uses deterministic derivation from user identity
- * Same Privy user always gets same Movement address
+ * Derive Ed25519 wallet from Privy embedded wallet signature
+ * Uses cryptographic signature - only the wallet holder can derive this wallet
+ * Same Privy user + same signature always gets same Movement address
+ *
+ * Security: Even the app operator cannot derive user wallets without the signature
  */
-function deriveWalletFromPrivyIdentity(
+async function deriveWalletFromPrivySignature(
   userId: string,
-  embeddedWalletAddress: string
-): Account {
+  signMessageFn: (message: string) => Promise<string>
+): Promise<Account> {
   const storageKey = `${WALLET_STORAGE_KEY}_${userId}`;
 
-  console.log("🔐 Deriving Movement wallet from Privy identity (no signing required)...");
+  console.log("🔐 Deriving Movement wallet from Privy signature (secure mode)...");
 
-  // Create deterministic seed from user ID + embedded wallet address + derivation message
-  const identityString = `${userId}:${embeddedWalletAddress}:${WALLET_DERIVATION_MESSAGE}`;
-  const identityBytes = new TextEncoder().encode(identityString);
-  const seed = sha256(identityBytes);
+  // Request signature from user's embedded wallet
+  // This is the cryptographic proof that only the wallet holder can produce
+  const signature = await signMessageFn(WALLET_DERIVATION_MESSAGE);
+
+  // Use signature as seed material
+  const signatureBytes = new TextEncoder().encode(signature);
+  const seed = sha256(signatureBytes);
   const seedHex = "0x" + bytesToHex(seed);
 
   // Create Ed25519 private key from the seed
@@ -164,7 +169,7 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // No existing wallet - need to derive from Privy identity
+    // No existing wallet - need to derive from Privy signature
     // Find the embedded wallet from Privy
     const embeddedWallet = wallets.find((w) => w.walletClientType === 'privy');
 
@@ -173,35 +178,50 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
       return; // Will retry when wallets change
     }
 
-    // Derive wallet from Privy identity (no signing required - no modal!)
-    setIsDerivingWallet(true);
-    try {
-      console.log("🔐 Found Privy embedded wallet:", embeddedWallet.address);
+    // Derive wallet from Privy signature (secure mode - requires user signature)
+    const deriveWallet = async () => {
+      setIsDerivingWallet(true);
+      try {
+        console.log("🔐 Found Privy embedded wallet:", embeddedWallet.address);
 
-      // Derive wallet deterministically from user ID + embedded wallet address
-      // This is synchronous and does not require user interaction
-      const derivedAccount = deriveWalletFromPrivyIdentity(user.id, embeddedWallet.address);
-      setAccount(derivedAccount);
-      setWalletAddress(derivedAccount.accountAddress.toString());
-    } catch (error) {
-      console.error("Failed to derive wallet from Privy:", error);
-      // Fallback: generate random wallet (shouldn't normally happen)
-      console.log("⚠️ Falling back to random wallet generation");
-      const fallbackAccount = Account.generate();
-      const storageKey = `${WALLET_STORAGE_KEY}_${user.id}`;
-      if (typeof window !== 'undefined') {
-        const walletData: StoredWallet = {
-          privateKey: fallbackAccount.privateKey.toString(),
-          address: fallbackAccount.accountAddress.toString(),
-          derivedFromPrivy: false,
+        // Get Ethereum provider from embedded wallet
+        const provider = await embeddedWallet.getEthereumProvider();
+
+        // Sign message using personal_sign (EIP-191)
+        // This requires user confirmation - providing security guarantee
+        const signMessageFn = async (message: string): Promise<string> => {
+          const signature = await provider.request({
+            method: 'personal_sign',
+            params: [message, embeddedWallet.address],
+          });
+          return signature as string;
         };
-        localStorage.setItem(storageKey, JSON.stringify(walletData));
+
+        const derivedAccount = await deriveWalletFromPrivySignature(user.id, signMessageFn);
+        setAccount(derivedAccount);
+        setWalletAddress(derivedAccount.accountAddress.toString());
+      } catch (error) {
+        console.error("Failed to derive wallet from Privy:", error);
+        // Fallback: generate random wallet (shouldn't normally happen)
+        console.log("⚠️ Falling back to random wallet generation");
+        const fallbackAccount = Account.generate();
+        const storageKey = `${WALLET_STORAGE_KEY}_${user.id}`;
+        if (typeof window !== 'undefined') {
+          const walletData: StoredWallet = {
+            privateKey: fallbackAccount.privateKey.toString(),
+            address: fallbackAccount.accountAddress.toString(),
+            derivedFromPrivy: false,
+          };
+          localStorage.setItem(storageKey, JSON.stringify(walletData));
+        }
+        setAccount(fallbackAccount);
+        setWalletAddress(fallbackAccount.accountAddress.toString());
+      } finally {
+        setIsDerivingWallet(false);
       }
-      setAccount(fallbackAccount);
-      setWalletAddress(fallbackAccount.accountAddress.toString());
-    } finally {
-      setIsDerivingWallet(false);
-    }
+    };
+
+    deriveWallet();
   }, [authenticated, user?.id, wallets]);
 
   const connect = useCallback(async () => {
