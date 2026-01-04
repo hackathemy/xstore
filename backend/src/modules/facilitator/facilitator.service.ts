@@ -244,9 +244,10 @@ export class FacilitatorService {
     const amountInSmallestUnit = this.parseAmountWithDecimals(amount, decimals);
 
     // Determine transfer function based on coin type
+    // Using aptos_account::transfer_coins for auto-registration of recipient
     const transferFunction = isStablecoin
-      ? '0x1::coin::transfer' // Generic coin transfer with type argument
-      : '0x1::aptos_account::transfer'; // Native MOVE transfer
+      ? '0x1::aptos_account::transfer_coins' // Auto-registers recipient if needed
+      : '0x1::aptos_account::transfer'; // Native MOVE transfer (also auto-registers)
 
     return {
       paymentId,
@@ -466,8 +467,9 @@ export class FacilitatorService {
     const amountInSmallestUnit = this.parseAmountWithDecimals(amount, decimals);
 
     // Determine transfer function based on coin type
+    // Using aptos_account::transfer_coins for auto-registration of recipient
     const transferFunction = isStablecoin
-      ? '0x1::coin::transfer'
+      ? '0x1::aptos_account::transfer_coins'
       : '0x1::aptos_account::transfer';
 
     return {
@@ -510,9 +512,9 @@ export class FacilitatorService {
       let payload: InputGenerateTransactionPayloadData;
 
       if (isStablecoin) {
-        // Stablecoin refund using coin::transfer with type argument
+        // Stablecoin refund using aptos_account::transfer_coins (auto-registers recipient)
         payload = {
-          function: '0x1::coin::transfer',
+          function: '0x1::aptos_account::transfer_coins',
           typeArguments: [targetCoinType],
           functionArguments: [
             AccountAddress.from(params.to),
@@ -801,9 +803,9 @@ export class FacilitatorService {
         ],
       };
     } else {
-      // Direct coin transfer
+      // Direct coin transfer with auto-registration
       return {
-        function: '0x1::coin::transfer',
+        function: '0x1::aptos_account::transfer_coins',
         typeArguments: [coinType],
         functionArguments: [
           AccountAddress.from(storeAddress),
@@ -840,35 +842,25 @@ export class FacilitatorService {
 
     this.logger.debug(`Validated Move addresses: recipient=${validRecipient}, sender=${validSender}`);
 
-    // Check if both sender and recipient are registered for the coin type
-    // In Move VM, 0x1::coin::transfer requires both parties to have CoinStore registered
+    // Using aptos_account::transfer_coins which auto-registers recipient
+    // No need to check recipient registration - it will be created automatically
+    // Sender must have CoinStore with sufficient balance (checked implicitly by transaction)
     if (isStablecoin) {
-      const [senderRegistered, recipientRegistered] = await Promise.all([
-        this.isRegisteredForCoin(validSender, coinType),
-        this.isRegisteredForCoin(validRecipient, coinType),
-      ]);
-
+      const senderRegistered = await this.isRegisteredForCoin(validSender, coinType);
       if (!senderRegistered) {
         throw new Error(
           `Sender ${validSender} is not registered for ${coinType}. ` +
           `Please register for the coin type first using the /api/x402/build-sponsored-registration endpoint.`
         );
       }
-
-      if (!recipientRegistered) {
-        throw new Error(
-          `Recipient (Store owner) ${validRecipient} is not registered for ${coinType}. ` +
-          `The store owner needs to register for TUSDC first before they can receive payments.`
-        );
-      }
-
-      this.logger.debug(`Both sender and recipient are registered for ${coinType}`);
+      this.logger.debug(`Sender is registered for ${coinType}, recipient will be auto-registered if needed`);
     }
 
     let payload: InputGenerateTransactionPayloadData;
     if (isStablecoin) {
+      // aptos_account::transfer_coins auto-registers recipient CoinStore
       payload = {
-        function: '0x1::coin::transfer',
+        function: '0x1::aptos_account::transfer_coins',
         typeArguments: [coinType],
         functionArguments: [AccountAddress.from(validRecipient), BigInt(amount)],
       };

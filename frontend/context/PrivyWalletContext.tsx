@@ -83,24 +83,22 @@ function loadStoredWallet(userId: string): Account | null {
 }
 
 /**
- * Derive Ed25519 wallet from Privy embedded wallet signature
- * This ensures deterministic key derivation - same Privy user always gets same Movement address
+ * Derive Ed25519 wallet from Privy user ID and embedded wallet address
+ * No signing required - uses deterministic derivation from user identity
+ * Same Privy user always gets same Movement address
  */
-async function deriveWalletFromPrivySignature(
+function deriveWalletFromPrivyIdentity(
   userId: string,
-  signMessageFn: (message: string) => Promise<string>
-): Promise<Account> {
+  embeddedWalletAddress: string
+): Account {
   const storageKey = `${WALLET_STORAGE_KEY}_${userId}`;
 
-  console.log("🔐 Deriving Movement wallet from Privy signature...");
+  console.log("🔐 Deriving Movement wallet from Privy identity (no signing required)...");
 
-  // Sign deterministic message with Privy embedded wallet
-  const signature = await signMessageFn(WALLET_DERIVATION_MESSAGE);
-  console.log("✅ Got signature from Privy wallet");
-
-  // Hash the signature to get a 32-byte seed for Ed25519 private key
-  const signatureBytes = new TextEncoder().encode(signature);
-  const seed = sha256(signatureBytes);
+  // Create deterministic seed from user ID + embedded wallet address + derivation message
+  const identityString = `${userId}:${embeddedWalletAddress}:${WALLET_DERIVATION_MESSAGE}`;
+  const identityBytes = new TextEncoder().encode(identityString);
+  const seed = sha256(identityBytes);
   const seedHex = "0x" + bytesToHex(seed);
 
   // Create Ed25519 private key from the seed
@@ -166,7 +164,7 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // No existing wallet - need to derive from Privy signature
+    // No existing wallet - need to derive from Privy identity
     // Find the embedded wallet from Privy
     const embeddedWallet = wallets.find((w) => w.walletClientType === 'privy');
 
@@ -175,49 +173,35 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
       return; // Will retry when wallets change
     }
 
-    // Derive wallet from Privy signature
-    const deriveWallet = async () => {
-      setIsDerivingWallet(true);
-      try {
-        console.log("🔐 Found Privy embedded wallet:", embeddedWallet.address);
+    // Derive wallet from Privy identity (no signing required - no modal!)
+    setIsDerivingWallet(true);
+    try {
+      console.log("🔐 Found Privy embedded wallet:", embeddedWallet.address);
 
-        // Get Ethereum provider from embedded wallet
-        const provider = await embeddedWallet.getEthereumProvider();
-
-        // Sign message using personal_sign (EIP-191)
-        const signMessageFn = async (message: string): Promise<string> => {
-          const signature = await provider.request({
-            method: 'personal_sign',
-            params: [message, embeddedWallet.address],
-          });
-          return signature as string;
+      // Derive wallet deterministically from user ID + embedded wallet address
+      // This is synchronous and does not require user interaction
+      const derivedAccount = deriveWalletFromPrivyIdentity(user.id, embeddedWallet.address);
+      setAccount(derivedAccount);
+      setWalletAddress(derivedAccount.accountAddress.toString());
+    } catch (error) {
+      console.error("Failed to derive wallet from Privy:", error);
+      // Fallback: generate random wallet (shouldn't normally happen)
+      console.log("⚠️ Falling back to random wallet generation");
+      const fallbackAccount = Account.generate();
+      const storageKey = `${WALLET_STORAGE_KEY}_${user.id}`;
+      if (typeof window !== 'undefined') {
+        const walletData: StoredWallet = {
+          privateKey: fallbackAccount.privateKey.toString(),
+          address: fallbackAccount.accountAddress.toString(),
+          derivedFromPrivy: false,
         };
-
-        const derivedAccount = await deriveWalletFromPrivySignature(user.id, signMessageFn);
-        setAccount(derivedAccount);
-        setWalletAddress(derivedAccount.accountAddress.toString());
-      } catch (error) {
-        console.error("Failed to derive wallet from Privy:", error);
-        // Fallback: generate random wallet (shouldn't normally happen)
-        console.log("⚠️ Falling back to random wallet generation");
-        const fallbackAccount = Account.generate();
-        const storageKey = `${WALLET_STORAGE_KEY}_${user.id}`;
-        if (typeof window !== 'undefined') {
-          const walletData: StoredWallet = {
-            privateKey: fallbackAccount.privateKey.toString(),
-            address: fallbackAccount.accountAddress.toString(),
-            derivedFromPrivy: false,
-          };
-          localStorage.setItem(storageKey, JSON.stringify(walletData));
-        }
-        setAccount(fallbackAccount);
-        setWalletAddress(fallbackAccount.accountAddress.toString());
-      } finally {
-        setIsDerivingWallet(false);
+        localStorage.setItem(storageKey, JSON.stringify(walletData));
       }
-    };
-
-    deriveWallet();
+      setAccount(fallbackAccount);
+      setWalletAddress(fallbackAccount.accountAddress.toString());
+    } finally {
+      setIsDerivingWallet(false);
+    }
   }, [authenticated, user?.id, wallets]);
 
   const connect = useCallback(async () => {
