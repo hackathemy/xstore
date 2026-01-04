@@ -1,3 +1,5 @@
+import { PaymentInfo } from "@/app/chat/page";
+
 // API Client for NestJS Backend
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
@@ -294,7 +296,8 @@ class ApiClient {
       menuItems?: any[];
       selectedStore?: any;
       selectedItems?: any[];
-      action?: 'search_stores' | 'search_menu' | 'create_order' | 'show_results' | 'confirm_order';
+      action?: 'search_stores' | 'search_menu' | 'create_order' | 'show_results' | 'confirm_order' | 'payment_ready';
+      paymentInfo?: PaymentInfo;
       orderSummary?: {
         storeId: string;
         storeName: string;

@@ -22,7 +22,7 @@ interface OrderSummary {
   totalAmount: string;
 }
 
-interface PaymentInfo {
+export interface PaymentInfo {
   tabId: string;
   totalAmount: string;
   storeName: string;
