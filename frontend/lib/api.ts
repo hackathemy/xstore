@@ -286,7 +286,7 @@ class ApiClient {
   async aiChat(data: {
     message: string;
     history?: Array<{ role: 'user' | 'assistant'; content: string }>;
-    userAddress?: string;
+    userAddress?: string | null;
   }) {
     return this.request<{
       message: string;
