@@ -96,6 +96,10 @@ class ApiClient {
     });
   }
 
+  async getStoreOrders(storeId: string) {
+    return this.request<any[]>(`/tabs/orders/${storeId}`);
+  }
+
   // Payments
   async initiatePayment(data: { tabId: string; payerAddress: string }) {
     return this.request<any>('/payments/initiate', {

@@ -192,4 +192,47 @@ export class TabsService {
       },
     });
   }
+
+  async getStoreOrders(storeId: string) {
+    // Get all tabs (orders) for a store - including paid ones
+    const tabs = await this.prisma.tab.findMany({
+      where: {
+        storeId,
+        status: {
+          in: ['PAID', 'PENDING_PAYMENT', 'OPEN'],
+        },
+      },
+      include: {
+        items: true,
+        payments: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: 50,
+    });
+
+    // Transform tabs to order format
+    return tabs.map((tab) => {
+      const totalItems = tab.items.reduce((sum, item) => sum + item.quantity, 0);
+      const customerAddress = tab.payments[0]?.payerAddress || 'Unknown';
+
+      return {
+        id: tab.id,
+        customer: customerAddress,
+        price: tab.totalAmount || tab.total?.toString() || '0',
+        count: totalItems,
+        createdAt: tab.createdAt,
+        status: tab.status,
+        items: tab.items.map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+      };
+    });
+  }
 }

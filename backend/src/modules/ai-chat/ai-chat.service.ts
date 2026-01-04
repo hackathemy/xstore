@@ -18,12 +18,20 @@ export interface ChatResponse {
   menuItems?: any[];
   selectedStore?: any;
   selectedItems?: any[];
-  action?: 'search_stores' | 'search_menu' | 'create_order' | 'show_results' | 'confirm_order';
+  action?: 'search_stores' | 'search_menu' | 'create_order' | 'show_results' | 'confirm_order' | 'payment_ready';
   orderSummary?: {
     storeId: string;
     storeName: string;
-    items: Array<{ id: string; name: string; price: string; quantity: number }>;
+    storeOwner?: string;
+    items: Array<{ id: string; name: string; price: string; quantity: number; subtotal?: string }>;
     totalAmount: string;
+  };
+  tabId?: string;
+  paymentInfo?: {
+    tabId: string;
+    totalAmount: string;
+    storeName: string;
+    storeOwner: string;
   };
 }
 
@@ -40,7 +48,7 @@ export class AiChatService {
     } else {
       this.genAI = new GoogleGenerativeAI(apiKey);
       this.model = this.genAI.getGenerativeModel({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
       });
     }
   }
@@ -119,6 +127,46 @@ export class AiChatService {
                   },
                 },
                 required: ['menuItemId', 'quantity'],
+              },
+            },
+          },
+          required: ['storeId', 'items'],
+        },
+      },
+      {
+        name: 'confirmPayment',
+        description: 'Confirm and create the payment tab for an order. Use this when user confirms they want to pay for the prepared order (says "결제해줘", "주문해줘", "pay", "confirm", "yes" etc).',
+        parameters: {
+          type: SchemaType.OBJECT,
+          properties: {
+            storeId: {
+              type: SchemaType.STRING,
+              description: 'The ID of the store',
+            },
+            items: {
+              type: SchemaType.ARRAY,
+              description: 'Array of items to order with their details',
+              items: {
+                type: SchemaType.OBJECT,
+                properties: {
+                  menuItemId: {
+                    type: SchemaType.STRING,
+                    description: 'The ID of the menu item',
+                  },
+                  name: {
+                    type: SchemaType.STRING,
+                    description: 'Name of the menu item',
+                  },
+                  price: {
+                    type: SchemaType.STRING,
+                    description: 'Price of the menu item',
+                  },
+                  quantity: {
+                    type: SchemaType.NUMBER,
+                    description: 'Quantity of the item',
+                  },
+                },
+                required: ['menuItemId', 'name', 'price', 'quantity'],
               },
             },
           },
@@ -219,6 +267,71 @@ export class AiChatService {
     };
   }
 
+  async createPaymentTab(
+    storeId: string,
+    items: Array<{ menuItemId: string; name: string; price: string; quantity: number }>,
+  ): Promise<any> {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+    });
+
+    if (!store) {
+      return { error: 'Store not found' };
+    }
+
+    // Create a new Tab
+    const tab = await this.prisma.tab.create({
+      data: {
+        storeId,
+        tableNumber: 1,
+        status: 'OPEN',
+      },
+    });
+
+    // Add items to the Tab
+    let totalAmount = 0;
+    const tabItems = [];
+
+    for (const item of items) {
+      const price = parseFloat(item.price);
+      const subtotal = price * item.quantity;
+      totalAmount += subtotal;
+
+      const tabItem = await this.prisma.tabItem.create({
+        data: {
+          tabId: tab.id,
+          menuItemId: item.menuItemId,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+        },
+      });
+      tabItems.push({
+        ...tabItem,
+        subtotal: subtotal.toFixed(6),
+      });
+    }
+
+    // Update tab total
+    await this.prisma.tab.update({
+      where: { id: tab.id },
+      data: {
+        totalAmount: totalAmount.toFixed(6),
+      },
+    });
+
+    this.logger.log(`Created payment tab ${tab.id} for store ${store.name} with total ${totalAmount.toFixed(6)} USDC`);
+
+    return {
+      tabId: tab.id,
+      storeId: store.id,
+      storeName: store.name,
+      storeOwner: store.owner,
+      items: tabItems,
+      totalAmount: totalAmount.toFixed(6),
+    };
+  }
+
   async chat(
     message: string,
     history: ChatMessage[] = [],
@@ -236,11 +349,21 @@ Your job is to help users:
 1. Find stores/restaurants they're looking for
 2. Browse menus and find specific items
 3. Prepare orders for payment via X402 protocol (USDC stablecoin)
+4. Process payments when users confirm
 
-When users ask about food or restaurants, use the searchStores function to find matching stores.
-When users want to see a menu, use getStoreMenu function.
-When users are looking for specific food items, use searchMenuItems function.
-When users want to order items, use prepareOrder function to create an order summary.
+FUNCTION USAGE:
+- searchStores: When users ask about food or restaurants
+- getStoreMenu: When users want to see a menu from a specific store
+- searchMenuItems: When users are looking for specific food items
+- prepareOrder: When users want to order specific items (creates order summary for review)
+- confirmPayment: When users confirm they want to pay (says "결제해줘", "주문해줘", "pay", "confirm", "yes", etc.)
+
+IMPORTANT PAYMENT FLOW:
+1. User selects items → use prepareOrder to show order summary
+2. User confirms payment → use confirmPayment with the same storeId and items
+3. When user says they want to order AND pay in the same message, use BOTH prepareOrder first to get item details, then confirmPayment
+
+When user explicitly says "결제", "pay", "주문해줘" with item details, proceed directly to confirmPayment.
 
 Always be friendly and helpful. Respond in the same language the user uses (Korean or English).
 When showing results, format them nicely and ask if the user wants to proceed.
@@ -272,6 +395,8 @@ Prices are in USDC (crypto stablecoin pegged to USD).`;
         let stores: any[] = [];
         let menuItems: any[] = [];
         let orderSummary: any = null;
+        let paymentInfo: ChatResponse['paymentInfo'] = undefined;
+        let tabId: string | undefined = undefined;
         let action: ChatResponse['action'] = 'show_results';
 
         for (const call of functionCalls) {
@@ -308,6 +433,26 @@ Prices are in USDC (crypto stablecoin pegged to USD).`;
               action = 'confirm_order';
               break;
 
+            case 'confirmPayment':
+              const paymentResult = await this.createPaymentTab(
+                call.args.storeId as string,
+                call.args.items as Array<{ menuItemId: string; name: string; price: string; quantity: number }>,
+              );
+              if (paymentResult.error) {
+                functionResult = paymentResult;
+              } else {
+                tabId = paymentResult.tabId;
+                paymentInfo = {
+                  tabId: paymentResult.tabId,
+                  totalAmount: paymentResult.totalAmount,
+                  storeName: paymentResult.storeName,
+                  storeOwner: paymentResult.storeOwner,
+                };
+                functionResult = paymentResult;
+                action = 'payment_ready';
+              }
+              break;
+
             default:
               functionResult = { error: 'Unknown function' };
           }
@@ -330,6 +475,8 @@ Prices are in USDC (crypto stablecoin pegged to USD).`;
           menuItems: menuItems.length > 0 ? menuItems : undefined,
           orderSummary: orderSummary || undefined,
           action,
+          tabId,
+          paymentInfo,
         };
       }
 
