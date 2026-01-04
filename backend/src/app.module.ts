@@ -16,6 +16,7 @@ import { RefundsModule } from './modules/refunds/refunds.module';
 import { X402Module } from './modules/x402/x402.module';
 import { FaucetModule } from './modules/faucet/faucet.module';
 import { AiChatModule } from './modules/ai-chat/ai-chat.module';
+import { ReservationsModule } from './modules/reservations/reservations.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { AiChatModule } from './modules/ai-chat/ai-chat.module';
     X402Module,
     FaucetModule,
     AiChatModule,
+    ReservationsModule,
   ],
 })
 export class AppModule {}

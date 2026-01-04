@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageLayout } from "@/components/layout";
 import { EmptyState, EmptyStateIcons } from "@/components/ui/empty-state";
+import { ReservationSuccessModal } from "@/components/ui/reservation-success-modal";
 import { RESERVATION_FEE } from "@/lib/constants";
 import {
   Select,
@@ -42,6 +43,8 @@ export default function ReservePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<"idle" | "paying" | "paid">("idle");
   const [balance, setBalance] = useState<string | null>(null);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successTxHash, setSuccessTxHash] = useState<string | undefined>();
 
   // Fetch balance on mount
   useEffect(() => {
@@ -189,8 +192,9 @@ export default function ReservePage() {
         }
       }
 
-      alert(`Reservation submitted successfully!${txHash ? `\nPayment TX: ${txHash.slice(0, 10)}...` : ""}`);
-      router.push(`/store/${store.id}`);
+      // Show success modal
+      setSuccessTxHash(txHash);
+      setShowSuccessModal(true);
     } catch (error) {
       console.error("Error creating reservation:", error);
       alert("Failed to create reservation. Please try again.");
@@ -217,6 +221,13 @@ export default function ReservePage() {
       return "Submitting...";
     }
     return `Reserve (${RESERVATION_FEE} USDC fee)`;
+  };
+
+  const handleModalClose = () => {
+    setShowSuccessModal(false);
+    setSuccessTxHash(undefined);
+    setPaymentStatus("idle");
+    router.push(`/store/${store?.id}`);
   };
 
   if (!store) {
@@ -402,6 +413,20 @@ export default function ReservePage() {
           )}
         </form>
       </div>
+
+      {/* Success Modal */}
+      <ReservationSuccessModal
+        isOpen={showSuccessModal}
+        onClose={handleModalClose}
+        txHash={successTxHash}
+        reservationDetails={{
+          customerName,
+          date,
+          time,
+          partySize,
+          storeName: store?.name || "",
+        }}
+      />
     </PageLayout>
   );
 }

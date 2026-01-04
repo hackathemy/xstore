@@ -13,6 +13,7 @@ const nextConfig = {
     ],
   },
   // Proxy Movement RPC requests to avoid CORS issues
+  // Proxy API requests to backend server
   async rewrites() {
     return [
       {
@@ -22,6 +23,11 @@ const nextConfig = {
       {
         source: '/movement-mainnet/:path*',
         destination: 'https://mainnet.movementnetwork.xyz/v1/:path*',
+      },
+      // Backend API proxy
+      {
+        source: '/api/:path*',
+        destination: 'http://localhost:3001/api/:path*',
       },
     ];
   },
